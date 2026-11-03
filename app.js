@@ -1,5 +1,5 @@
 /* =========================================================
-   工作台 · 多智能体控制台（前端原型 / mock 数据）
+   工作台 · 多智能体控制台
    ========================================================= */
 
 /* ---------- 品牌图标 ---------- */
@@ -408,6 +408,7 @@ async function openSessSheet(){
 }
 
 async function loadRealSession(id, source){
+  rememberDraft();
   if(!$('#viewChat').classList.contains('is-active')){
     $('#viewHome').classList.remove('is-active');
     $('#viewChat').classList.add('is-active');
@@ -415,6 +416,10 @@ async function loadRealSession(id, source){
   const src = source || (state.realSessions.find(s=> s.id === id) || {}).source || 'workbuddy';
   state.realSessionId = id;
   state.realSessionSource = src;
+  controlUI.loading = true;
+  controlUI.selected = sendKey(src, id);
+  $('#input').value = controlUI.drafts.get(controlUI.selected) || '';
+  updateSendState();
 
   const idx = agents.findIndex(a=> a.source === src);
   if(idx >= 0 && idx !== current){ current = idx; renderChips(); }
@@ -429,6 +434,7 @@ async function loadRealSession(id, source){
     const r = await fetch(url, { cache:'no-store' });
     if(!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
+    if(state.realSessionId !== id || state.realSessionSource !== src) return;
     const sess = d.session || state.realSessions.find(s=> s.id === id) || {};
     const slot = sessions[src] || (sessions[src] = { title:'', messages: [] });
 
@@ -453,9 +459,15 @@ async function loadRealSession(id, source){
     renderSession();
     startSessionPoll();
   }catch(e){
+    if(state.realSessionId !== id || state.realSessionSource !== src) return;
     box.innerHTML = `<div class="empty-state">
       <div class="empty-state__title">读取失败</div>${esc(String(e.message || e))}
     </div>`;
+  }finally{
+    if(state.realSessionId === id && state.realSessionSource === src){
+      controlUI.loading = false;
+      updateSendState();
+    }
   }
 }
 
@@ -642,6 +654,7 @@ function renderChips(){
 }
 
 function renderSession(){
+  updateSendState();
   const a = agents[current];
   const box = $('#messages');
   box.innerHTML = '';
@@ -873,6 +886,7 @@ async function openChat(index){
 }
 
 function goHome(){
+  rememberDraft();
   stopSessionPoll();
   $('#viewChat').classList.remove('is-active');
   $('#viewHome').classList.add('is-active');
@@ -881,6 +895,7 @@ function goHome(){
 function switchAgent(i){
   if(i === current) return;
   current = i;
+  updateSendState();
   renderChips();
 
   const a = agents[i];
@@ -889,22 +904,202 @@ function switchAgent(i){
 }
 
 /* ---------- 发送 ---------- */
-function send(){
-  const input = $('#input');
-  const text = input.value.trim();
-  if(!text) return;
+const SEND_STORAGE = 'agent-phone.pendingSends.v1';
+const controlUI = {
+  csrf: null, sources: null, loading: false, selected: '',
+  pending: new Map(), drafts: new Map(), submitting: new Set(), errors: new Map(), polling: false,
+};
+const sendKey = (source, id) => `${source}:${id}`;
+const SEND_ACTIVE = new Set(['queued', 'starting', 'running', 'unconfirmed', 'unknown']);
+try{
+  const saved = JSON.parse(localStorage.getItem(SEND_STORAGE) || '[]');
+  if(Array.isArray(saved)) saved.slice(-20).forEach(p=>{
+    if(p && /^[0-9a-f-]{36}$/.test(p.id) && /^[0-9a-f-]{36}$/.test(p.session)
+       && p.source === 'codex' && typeof p.text === 'string' && p.text.length <= 12000){
+      controlUI.pending.set(sendKey(p.source, p.session), p);
+    }
+  });
+}catch(e){ /* Private mode or old storage: start without saved requests. */ }
 
-  const a = agents[current];
-  if(a.id !== 'workbuddy'){
-    toast(`${a.name} 未接入，无法发送`);
+function persistSends(){
+  try{
+    const values = [...controlUI.pending.values()];
+    const active = values.filter(p=>SEND_ACTIVE.has(p.status));
+    const recent = values.filter(p=>!SEND_ACTIVE.has(p.status)).sort((a,b)=>a.createdAt-b.createdAt).slice(-20);
+    localStorage.setItem(SEND_STORAGE, JSON.stringify([...recent, ...active]));
+    return true;
+  }catch(e){ return false; }
+}
+
+function rememberDraft(){
+  if(controlUI.selected) controlUI.drafts.set(controlUI.selected, $('#input').value);
+}
+
+function newRequestId(){
+  // WireGuard's HTTP address is not a secure context; randomUUID may be unavailable.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(x=>x.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+async function controlFetch(url, options={}){
+  const abort = new AbortController();
+  const timer = setTimeout(()=>abort.abort(), 15000);
+  try{
+    const r = await fetch(url, { ...options, cache:'no-store', signal:abort.signal });
+    const d = await r.json();
+    if(!r.ok){
+      const error = new Error(d.error?.message || `请求失败（${r.status}）`);
+      error.code = d.error?.code;
+      error.status = r.status;
+      throw error;
+    }
+    return d;
+  }finally{ clearTimeout(timer); }
+}
+
+async function loadControl(){
+  try{
+    const d = await controlFetch('/api/control');
+    controlUI.csrf = d.csrfToken;
+    controlUI.sources = d.sources;
+  }catch(e){
+    controlUI.csrf = null;
+  }
+  updateSendState();
+}
+
+function applySendJob(p, job){
+  if(job.id !== p.id || job.session !== p.session || job.source !== p.source) return;
+  const key = sendKey(p.source, p.session);
+  if(p.status === 'unconfirmed' && job.status !== 'unconfirmed'){
+    if(controlUI.selected === key && $('#input').value.trim() === p.text){
+      $('#input').value = '';
+      controlUI.drafts.set(key, '');
+    }
+  }
+  Object.assign(p, { status:job.status, message:job.message, updatedAt:job.updatedAt });
+  if(job.status === 'failed' && !controlUI.drafts.get(key)){
+    controlUI.drafts.set(key, p.text);
+    if(controlUI.selected === key && !$('#input').value) $('#input').value = p.text;
+  }
+  persistSends();
+  updateSendState();
+  if(job.status === 'completed' && controlUI.selected === key) pollSession();
+}
+
+async function submitPending(p){
+  const key = sendKey(p.source, p.session);
+  if(controlUI.submitting.has(key)) return;
+  controlUI.submitting.add(key);
+  controlUI.errors.delete(key);
+  updateSendState();
+  try{
+    if(!controlUI.csrf) await loadControl();
+    if(!controlUI.csrf) throw new Error('网关未连接');
+    const d = await controlFetch('/api/send', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
+      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text }),
+    });
+    // Only clear the exact submitted draft, never text typed while waiting or another chat.
+    if(controlUI.selected === key && $('#input').value.trim() === p.text){
+      $('#input').value = '';
+      controlUI.drafts.set(key, '');
+    }
+    applySendJob(p, d.job);
+    if(controlUI.selected === key) pollSession();
+  }catch(e){
+    if(e.status === 403 || e.status === 401){
+      // A previous attempt may have run before the gateway restarted and rotated CSRF.
+      p.status = 'unconfirmed';
+      p.message = '连接校验已更新。正在刷新，请再确认发送结果；会保留原请求编号。';
+      controlUI.csrf = null;
+      await loadControl();
+    }else if(e.status >= 400 && e.status < 500 && e.status !== 408){
+      controlUI.pending.delete(key);
+      controlUI.errors.set(key, e.message);
+    }else{
+      // The server may have accepted this request before the connection failed.
+      p.status = 'unconfirmed';
+      p.message = '发送结果尚未确认。请点“确认发送结果”，不会重复创建任务。';
+    }
+    persistSends();
+  }finally{
+    controlUI.submitting.delete(key);
+    updateSendState();
+  }
+}
+
+async function send(){
+  const a = agents[current], input = $('#input');
+  const text = input.value.trim();
+  if(!text || !a?.source || a.source !== state.realSessionSource || !state.realSessionId || controlUI.loading) return;
+  const key = sendKey(a.source, state.realSessionId);
+  if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
+  if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
+  const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
+    status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
+  controlUI.pending.set(key, p);
+  if(!persistSends()){
+    controlUI.pending.delete(key);
+    controlUI.errors.set(key, '浏览器无法保存发送记录。请允许此站点使用本地存储后再发送。');
+    updateSendState();
     return;
   }
-  toast('发送通道尚未接入网关，消息未送达');
+  await submitPending(p);
+}
+
+async function pollSendJobs(){
+  if(document.hidden || controlUI.polling) return;
+  controlUI.polling = true;
+  try{
+    for(const p of controlUI.pending.values()){
+      if(!SEND_ACTIVE.has(p.status) || p.status === 'unknown') continue;
+      try{
+        const d = await controlFetch('/api/jobs?id=' + encodeURIComponent(p.id));
+        applySendJob(p, d.job);
+      }catch(e){ /* Keep the request ID on outages; never silently resend. */ }
+    }
+  }finally{ controlUI.polling = false; }
+}
+
+async function acknowledgeSend(){
+  const p = controlUI.pending.get(controlUI.selected);
+  if(!p || p.status !== 'unknown') return;
+  try{
+    if(!controlUI.csrf) await loadControl();
+    const d = await controlFetch('/api/jobs/acknowledge', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
+      body:JSON.stringify({ requestId:p.id }),
+    });
+    applySendJob(p, d.job);
+  }catch(e){ toast(e.message); }
 }
 
 function updateSendState(){
-  const ready = $('#input').value.trim().length > 0;
-  $('#btnSend').classList.toggle('is-ready', ready);
+  const a = agents[current], input = $('#input'), btn = $('#btnSend');
+  const selected = a?.source && state.realSessionId && state.realSessionSource === a.source;
+  const key = selected ? sendKey(a.source, state.realSessionId) : '';
+  const capability = controlUI.sources?.[a?.source];
+  const p = controlUI.pending.get(key);
+  const busy = controlUI.submitting.has(key) || SEND_ACTIVE.has(p?.status);
+  const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
+  const ready = available && !busy && input.value.trim().length > 0;
+  btn.disabled = !ready;
+  btn.classList.toggle('is-ready', !!ready);
+  input.disabled = !available;
+  input.placeholder = !selected ? '请选择会话' : capability?.available ? '发送到当前会话…' : '此客户端暂不支持发送';
+  let message = !selected ? '请选择一段会话。' : !controlUI.csrf ? '发送网关未连接，正在检查…'
+    : controlUI.loading ? '正在载入会话…' : capability?.reason || '此客户端尚未接通发送。';
+  if(selected && capability?.available && !p) message += ' 请勿在桌面和手机同时操作同一会话。';
+  if(p) message = p.message || message;
+  if(controlUI.errors.has(key)) message = controlUI.errors.get(key);
+  $('#sendStatusText').textContent = message;
+  $('#sendStatus').classList.toggle('is-error', (!controlUI.submitting.has(key) && ['failed','unknown','unconfirmed'].includes(p?.status)) || controlUI.errors.has(key));
+  $('#btnCheckSend').hidden = p?.status !== 'unconfirmed' || controlUI.submitting.has(key);
+  $('#btnAcknowledgeSend').hidden = p?.status !== 'unknown';
 }
 
 /* ---------- 统计刷新 ---------- */
@@ -962,11 +1157,16 @@ function bind(){
   });
   $('#proPill').addEventListener('click', ()=> toast('当前套餐：Pro'));
 
-  $('#input').addEventListener('input', updateSendState);
+  $('#input').addEventListener('input', ()=>{ rememberDraft(); updateSendState(); });
   $('#input').addEventListener('keydown', e=>{
-    if(e.key === 'Enter'){ e.preventDefault(); send(); }
+    if(e.key === 'Enter' && !e.isComposing){ e.preventDefault(); send(); }
   });
   $('#btnSend').addEventListener('click', send);
+  $('#btnCheckSend').addEventListener('click', ()=>{
+    const p = controlUI.pending.get(controlUI.selected);
+    if(p?.status === 'unconfirmed') submitPending(p);
+  });
+  $('#btnAcknowledgeSend').addEventListener('click', acknowledgeSend);
 
 // 浏览器返回键
   window.addEventListener('popstate', ()=>{
@@ -975,7 +1175,10 @@ function bind(){
 
   // 从后台切回时立即刷新一次，不等下一轮
   document.addEventListener('visibilitychange', ()=>{
-    if(!document.hidden && $('#viewChat').classList.contains('is-active')) pollSession();
+    if(!document.hidden){
+      loadControl(); pollSendJobs();
+      if($('#viewChat').classList.contains('is-active')) pollSession();
+    }
   });
 }
 
@@ -986,6 +1189,11 @@ renderChips();
 renderPicker();
 renderProjects();
 bind();
+updateSendState();
+loadControl();
+pollSendJobs();
+setInterval(pollSendJobs, 2000);
+setInterval(()=>{ if(!document.hidden && !controlUI.csrf) loadControl(); }, 15000);
 
 // 接入真实用量与会话列表，之后每 30 秒轮询
 syncUsage(false);

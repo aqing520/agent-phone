@@ -24,9 +24,13 @@ import os
 import re
 import threading
 import time
+import ipaddress
+import secrets
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta
 from collections import defaultdict
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from control import ControlService, ControlError
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKBUDDY = os.path.expanduser("~/.workbuddy")
@@ -43,6 +47,17 @@ _lock = threading.Lock()
 _cache = {"at": 0.0, "data": None}
 _cache2 = {"at": 0.0, "data": None}
 CACHE_TTL = 5.0
+CSRF_TOKEN = secrets.token_urlsafe(32)
+_control_service = None
+_control_lock = threading.Lock()
+
+
+def get_control_service():
+    global _control_service
+    with _control_lock:
+        if _control_service is None:
+            _control_service = ControlService(enabled=HOST in ("127.0.0.1", "::1", "localhost"))
+        return _control_service
 
 
 def nn(v):
@@ -1007,11 +1022,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self.path.split("?", 1)[0] in STATIC_FILES:
+            self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
-    def _json(self, obj):
+    def _json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
@@ -1022,14 +1039,83 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _valid_host(self):
+        # Literal private IPs support LAN/WireGuard, while rejecting DNS rebinding.
+        try:
+            host = urlsplit("//" + self.headers.get("Host", ""))
+            if host.username or host.password or host.path or host.query or host.fragment or (host.port or 80) != self.server.server_port:
+                return False
+            return host.hostname == "localhost" or ipaddress.ip_address(host.hostname).is_private
+        except (ValueError, TypeError):
+            return False
+
+    def _read_post(self):
+        if not self._valid_host():
+            raise ControlError("invalid_host", "访问地址无效。", 403)
+        origin = self.headers.get("Origin")
+        if (origin and origin != "http://" + self.headers.get("Host", "")) or self.headers.get("Sec-Fetch-Site") == "cross-site":
+            raise ControlError("invalid_origin", "只接受当前看板页面发起的发送请求。", 403)
+        token = self.headers.get("X-Agent-Phone-CSRF", "")
+        if not secrets.compare_digest(token, CSRF_TOKEN):
+            raise ControlError("invalid_csrf", "连接状态已更新，请刷新发送状态后重试。", 403)
+        if self.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+            raise ControlError("invalid_content_type", "发送请求必须使用 JSON。", 415)
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ControlError("invalid_length", "请求长度无效。")
+        if length <= 0 or length > 65536:
+            raise ControlError("invalid_length", "发送请求为空或过大。", 413)
+        self.connection.settimeout(15)
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeError):
+            raise ControlError("invalid_json", "发送请求不是有效的 JSON。")
+
+    def do_POST(self):
+        try:
+            path = urlsplit(self.path).path
+            if path not in ("/api/send", "/api/jobs/acknowledge"):
+                raise ControlError("not_found", "没有这个接口。", 404)
+            payload = self._read_post()
+            if path == "/api/jobs/acknowledge":
+                if not isinstance(payload, dict) or not isinstance(payload.get("requestId"), str):
+                    raise ControlError("invalid_id", "发送记录标识无效。")
+                self._json({"job": get_control_service().acknowledge(payload["requestId"])})
+                return
+            job = get_control_service().submit(
+                payload, lambda sid, source: find_codex_file(sid) if source == "codex" else None,
+            )
+            self._json({"job": job}, 202)
+        except ControlError as exc:
+            self._json({"error": {"code": exc.code, "message": exc.message}}, exc.status)
+        except Exception:
+            self._json({"error": {"code": "internal_error", "message": "网关暂时无法受理，请使用原请求编号确认结果。"}}, 500)
+
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path.startswith("/api/") and not self._valid_host():
+            self._json({"error": {"code": "invalid_host", "message": "访问地址无效。"}}, 403)
+            return
         query = {}
         if "?" in self.path:
             for kv in self.path.split("?", 1)[1].split("&"):
                 if "=" in kv:
                     k, v = kv.split("=", 1)
                     query[k] = v
+
+        if path in ("/api/control", "/api/jobs"):
+            try:
+                service = get_control_service()
+                if path == "/api/control":
+                    self._json({"csrfToken": CSRF_TOKEN, "sources": service.capabilities()})
+                else:
+                    self._json({"job": service.get(query.get("id", ""))})
+            except ControlError as exc:
+                self._json({"error": {"code": exc.code, "message": exc.message}}, exc.status)
+            except Exception:
+                self._json({"error": {"code": "control_unavailable", "message": "发送状态暂时不可用，请稍后确认原请求结果。"}}, 503)
+            return
 
         if path == "/api/usage":
             self._json(get_usage())

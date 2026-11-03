@@ -15,7 +15,8 @@ agent-phone 本地网关
     reasoning   = min(completion_tokens, completion_tokens_details.reasoning_tokens)
     output      = completion_tokens - reasoning
 - 模型名日志里是占位（auto），trace 汇总才有真实模型名
-仅监听局域网，无鉴权（家庭网络使用，请勿暴露到公网）
+默认供局域网使用；私人中转部署通过环境变量绑定回环地址。
+无应用层鉴权，请勿直接暴露到公网。
 """
 import json
 import glob
@@ -31,7 +32,12 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKBUDDY = os.path.expanduser("~/.workbuddy")
 CODEX = os.path.expanduser("~/.codex")
 DSH = os.path.expanduser("~/.dsh")
-PORT = 5173
+HOST = os.environ.get("AGENT_PHONE_HOST", "0.0.0.0")
+PORT = int(os.environ.get("AGENT_PHONE_PORT", "5173"))
+STATIC_FILES = {
+    "/", "/index.html", "/app.js", "/styles.css",
+    "/manifest.webmanifest", "/icon-192.png", "/icon-512.png",
+}
 
 _lock = threading.Lock()
 _cache = {"at": 0.0, "data": None}
@@ -1000,7 +1006,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=ROOT, **kwargs)
 
     def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
 
     def _json(self, obj):
@@ -1010,7 +1016,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -1043,12 +1053,19 @@ class Handler(SimpleHTTPRequestHandler):
                 "messages": data["messages"],
             })
             return
-        super().do_GET()
+        # Never serve source, local configuration, Git metadata or directory listings.
+        if path not in STATIC_FILES:
+            self.send_error(404)
+            return
+        if self.command == "HEAD":
+            super().do_HEAD()
+        else:
+            super().do_GET()
 
     def log_message(self, fmt, *args):
         pass
 
 
 if __name__ == "__main__":
-    print(f"agent-phone 网关: http://0.0.0.0:{PORT}  (静态 + /api/usage + /api/sessions)")
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    print(f"agent-phone 网关: http://{HOST}:{PORT}  (静态 + /api/usage + /api/sessions)", flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

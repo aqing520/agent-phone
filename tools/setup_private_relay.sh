@@ -73,6 +73,11 @@ Match all
 EOF
 /usr/sbin/sshd -t
 systemctl enable --now wg-quick@apwg0
+# Preserve host firewall defaults and existing rules. Only add the private service.
+if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
+    ufw allow 51820/udp comment 'agent-phone WireGuard'
+    ufw allow in on apwg0 from 10.77.73.2 to 10.77.73.1 port 5173 proto tcp comment 'agent-phone private dashboard'
+fi
 systemctl reload ssh
 echo 'Private relay installed. Allow inbound UDP 51820 in the cloud firewall.'
 echo 'Dashboard: http://10.77.73.1:5173 (WireGuard connection required).'

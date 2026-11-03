@@ -17,7 +17,7 @@ WireGuard 到云服务器、SSH 到 Mac 分别加密；云服务器作为受信�
 1. Ubuntu 云服务器安装 `wireguard-tools`、`qrencode`。
 2. Mac 生成专用 Ed25519 隧道密钥，不要复用 root 管理密钥。
 3. 将 `tools/setup_private_relay.sh` 复制到服务器，以 root 执行，将公网 IPv4 作为参数，Mac 的隧道公钥通过标准输入传入。
-4. 云防火墙允许入站 UDP 51820；不用开放公网 TCP 5173。
+4. 云防火墙允许入站 UDP 51820；不用开放公网 TCP 5173。如果 Ubuntu 的 UFW 已启用，安装脚本会添加 UDP 51820 和仅限 WireGuard 接口的手机看板访问规则，保留原有策略。
 5. Mac 确认 SSH 主机指纹已记录后运行：
 
 ```sh

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import subprocess
+import time
 
 
 def main():
@@ -54,12 +55,32 @@ def main():
         job = {**common, **settings, "Label": label,
                "StandardOutPath": str(logs / (label + ".out.log")),
                "StandardErrorPath": str(logs / (label + ".err.log"))}
+        if path.exists():
+            with path.open("rb") as stream:
+                unchanged = plistlib.load(stream) == job
+            loaded = subprocess.run(
+                ["launchctl", "print", domain + "/" + label],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ).returncode == 0
+            if unchanged and loaded:
+                print("Already running:", label)
+                continue
         with path.open("wb") as stream:
             plistlib.dump(job, stream)
         path.chmod(0o600)
         subprocess.run(["launchctl", "bootout", domain + "/" + label],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["launchctl", "bootstrap", domain, str(path)], check=True)
+        # bootout can return before launchd has finished unloading the old job.
+        for attempt in range(20):
+            result = subprocess.run(
+                ["launchctl", "bootstrap", domain, str(path)],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError(f"Could not load {label}: {result.stderr.strip()}")
         print("Installed:", label)
 
 

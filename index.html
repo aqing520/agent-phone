@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#F4F3F7" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<title>工作台</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ============ 工作台 ============ -->
+  <section class="view is-active" id="viewHome">
+    <header class="topbar">
+      <h1 class="topbar__title">工作台</h1>
+      <div class="topbar__actions">
+        <button class="pill" id="lanPill">
+          <span class="dot dot--live"></span>
+          <span>局域网直连</span>
+        </button>
+        <button class="icon-btn" id="btnRefresh" aria-label="刷新">
+          <svg viewBox="0 0 24 24" class="ic"><path d="M20 11a8 8 0 0 0-14.2-4.9M4 13a8 8 0 0 0 14.2 4.9" /><path d="M20 4.5V11h-6.2M4 19.5V13h6.2" /></svg>
+        </button>
+        <button class="icon-btn" id="btnSettings" aria-label="设置">
+          <svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="3.2" /><path d="M19.4 14.5a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.88 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.88.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.88V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.47z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="scroll" id="homeScroll">
+
+      <!-- 活跃热力图 -->
+      <article class="card heatmap-card">
+        <div class="card__head">
+          <span class="card__icon card__icon--purple">
+            <svg viewBox="0 0 24 24" class="ic"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
+          </span>
+          <h2 class="card__title">活跃热力图</h2>
+          <svg viewBox="0 0 24 24" class="ic chev"><path d="M9 6l6 6-6 6" /></svg>
+        </div>
+
+        <div class="heatmap" id="heatmap"></div>
+
+        <div class="statbar">
+          <div class="stat">
+            <span class="stat__label">今日消耗</span>
+            <span class="stat__value" data-stat="today">395.33M</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">累计消耗</span>
+            <span class="stat__value" data-stat="total">28.47G</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">缓存命中</span>
+            <span class="stat__value" data-stat="cache">85.1%</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">对话轮次</span>
+            <span class="stat__value" data-stat="rounds">8732</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 最近项目 -->
+      <section class="section">
+        <div class="section__head">
+          <span class="section__icon">
+            <svg viewBox="0 0 24 24" class="ic"><path d="M3.5 7.3c0-1.1.9-2 2-2h3.2l2 2.4h7.8c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z" /><path d="M3.5 11h17" /></svg>
+          </span>
+          <h2 class="section__title">最近项目</h2>
+          <button class="section__more" id="btnAllSessions">全部会话
+            <svg viewBox="0 0 24 24" class="ic"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+        <div class="proj-row" id="projRow"></div>
+      </section>
+
+      <!-- 智能体看板 -->
+      <section class="section">
+        <div class="section__head">
+          <span class="section__icon">
+            <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
+          </span>
+          <h2 class="section__title">智能体看板</h2>
+          <span class="section__meta">运行中 <b id="runningCount">4</b>/<span id="totalCount">5</span></span>
+        </div>
+        <p class="section__hint">只列本机客户端；GLM 等经 WorkBuddy 路由的模型已并入 WorkBuddy，不再单独成卡</p>
+        <div class="agent-grid" id="agentGrid"></div>
+      </section>
+
+      <div class="scroll-pad"></div>
+    </main>
+  </section>
+
+  <!-- ============ 会话 ============ -->
+  <section class="view" id="viewChat">
+    <header class="chat-head">
+      <div class="chipbar" id="chipBar">
+        <button class="chip chip--menu" id="btnBack" aria-label="返回">
+          <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="4" width="18" height="16" rx="4" /><path d="M8 10h8M8 14h5" /></svg>
+        </button>
+        <div class="chip-scroll" id="chipScroll"></div>
+        <button class="chip chip--home" id="btnHome" aria-label="工作台">
+          <svg viewBox="0 0 24 24" class="ic"><path d="M4 10.5 12 3.5l8 7V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z" /></svg>
+        </button>
+      </div>
+
+      <button class="sessionbar" id="sessionBar">
+        <svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="8.6" /><path d="M12 7.5V12l3.2 2" /></svg>
+        <span class="sessionbar__title" id="sessionTitle"></span>
+        <svg viewBox="0 0 24 24" class="ic chev"><path d="M9 6l6 6-6 6" /></svg>
+      </button>
+    </header>
+
+    <main class="messages" id="messages"></main>
+
+    <footer class="composer">
+      <button class="pro-pill" id="proPill">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" /></svg>
+        Pro
+      </button>
+      <button class="icon-btn icon-btn--flat" aria-label="附件">
+        <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="4" width="18" height="16" rx="3.5" /><circle cx="8.6" cy="10" r="1.6" /><path d="M4.5 17.5 9.8 12.6l3.2 3 3-2.6 3.5 3.4" /></svg>
+      </button>
+      <div class="input-wrap">
+        <input id="input" class="input" placeholder="输入消息..." autocomplete="off" />
+      </div>
+      <button class="send" id="btnSend" aria-label="发送">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
+      </button>
+    </footer>
+  </section>
+
+</div>
+
+<!-- 设置面板 -->
+<div class="sheet-mask" id="sheetMask">
+  <div class="sheet">
+    <div class="sheet__grab"></div>
+    <h3 class="sheet__title">连接与偏好</h3>
+
+    <div class="row">
+      <div>
+        <div class="row__title">局域网直连</div>
+        <div class="row__desc" id="lanDesc">正在读取网关地址…</div>
+      </div>
+      <button class="switch is-on" data-toggle></button>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row__title">完成时推送</div>
+        <div class="row__desc">长任务结束时通知</div>
+      </div>
+      <button class="switch is-on" data-toggle></button>
+    </div>
+    <div class="row">
+      <div>
+        <div class="row__title">消耗统计口径</div>
+        <div class="row__desc">含缓存读 / 缓存写</div>
+      </div>
+      <button class="switch" data-toggle></button>
+    </div>
+
+    <div class="sheet__group">
+      看板展示
+      <span class="sheet__group-hint">关掉的客户端不占位，随时可打开</span>
+    </div>
+    <div class="picker" id="agentPicker"></div>
+
+    <button class="sheet__done" id="sheetDone">完成</button>
+  </div>
+</div>
+
+<div class="sheet-mask" id="sessMask">
+  <div class="sheet sheet--sess">
+    <div class="sheet__grab"></div>
+    <h3 class="sheet__title">会话历史 <span class="sheet__sub" id="sessMeta"></span></h3>
+    <div class="sess-list" id="sessList"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

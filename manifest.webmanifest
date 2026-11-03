@@ -1,0 +1,16 @@
+{
+  "name": "工作台 · 智能体控制台",
+  "short_name": "工作台",
+  "description": "局域网直连的多智能体控制台：用量看板、专家团队、会话控制。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F4F3F7",
+  "theme_color": "#F4F3F7",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

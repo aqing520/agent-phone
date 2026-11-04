@@ -1095,6 +1095,7 @@ function updateSendState(){
     : controlUI.loading ? '正在载入会话…' : capability?.reason || '此客户端尚未接通发送。';
   if(selected && capability?.available && !p) message += ' 同一会话可连续对话。';
   if(p) message = p.message || message;
+  if(p?.status === 'failed' && p.message) message = `上次发送失败。${p.message}`;
   if(controlUI.errors.has(key)) message = controlUI.errors.get(key);
   $('#sendStatusText').textContent = message;
   $('#sendStatus').classList.toggle('is-error', (!controlUI.submitting.has(key) && ['failed','unknown','unconfirmed'].includes(p?.status)) || controlUI.errors.has(key));

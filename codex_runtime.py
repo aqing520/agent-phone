@@ -1,6 +1,6 @@
 """Own one official Codex app-server process and dispatch durable phone turns.
 
-Only wake/status are exposed on a user-private Unix socket. HTTP restarts do not
+Only wake/status/release are exposed on a user-private Unix socket. HTTP restarts do not
 close Codex; a lost Codex connection marks in-flight messages unknown, never queued.
 """
 import argparse
@@ -19,10 +19,15 @@ from control import ControlService, ControlError, session_context
 
 
 class RpcError(Exception):
-    pass
+    def __init__(self, message, data=None):
+        super().__init__(message)
+        self.data = data
 
 
 class AppServerClient:
+    arguments = ("app-server", "--stdio", "-c", "thread_unload_delay_secs=0")
+    envelope = {}
+
     def __init__(self, binary, log_path, on_notification):
         self.on_notification = on_notification
         self.pending = {}
@@ -34,7 +39,7 @@ class AppServerClient:
         self.log = os.fdopen(fd, "w")
         try:
             self.proc = subprocess.Popen(
-                [binary, "app-server", "--stdio", "-c", "thread_unload_delay_secs=0"], stdin=subprocess.PIPE,
+                [binary, *self.arguments], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=self.log, text=True,
                 encoding="utf-8", errors="replace", bufsize=1,
             )
@@ -44,18 +49,21 @@ class AppServerClient:
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         try:
-            self.request("initialize", {"clientInfo": {"name": "agent_phone", "version": "0.2.0"},
-                                        "capabilities": {"experimentalApi": True}})
-            self.send({"method": "initialized", "params": {}})
+            self.initialize()
         except Exception:
             self.close()
             raise
 
+    def initialize(self):
+        self.request("initialize", {"clientInfo": {"name": "agent_phone", "version": "0.2.0"},
+                                    "capabilities": {"experimentalApi": True}})
+        self.send({"method": "initialized", "params": {}})
+
     def send(self, message):
         with self.lock:
             if self.closed.is_set():
-                raise ConnectionError("Codex connection closed")
-            self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+                raise ConnectionError("Runtime connection closed")
+            self.proc.stdin.write(json.dumps({**self.envelope, **message}, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
 
     def request(self, method, params, timeout=30):
@@ -72,11 +80,11 @@ class AppServerClient:
         if not done.wait(timeout):
             with self.lock:
                 self.pending.pop(request_id, None)
-            raise TimeoutError("Codex RPC timed out")
+            raise TimeoutError("Runtime RPC timed out")
         if "error" in slot:
-            raise RpcError(slot["error"].get("message", "Codex rejected request"))
+            raise RpcError(slot["error"].get("message", "Runtime rejected request"), slot["error"].get("data"))
         if "disconnected" in slot:
-            raise ConnectionError("Codex connection closed")
+            raise ConnectionError("Runtime connection closed")
         return slot.get("result", {})
 
     def _read(self):
@@ -141,6 +149,15 @@ class AppServerClient:
 
 
 class RuntimeDaemon:
+    source = "codex"
+    runtime_name = "Codex"
+    socket_stem = "runtime"
+    client_type = AppServerClient
+    stderr_name = "app-server.stderr.log"
+
+    def binary(self):
+        return self.service.codex
+
     def __init__(self, service):
         self.service = service
         self.client = None
@@ -270,7 +287,10 @@ class RuntimeDaemon:
 
     def dispatch(self):
         with self.service.db() as conn:
-            rows = conn.execute("SELECT * FROM jobs WHERE source='codex' AND status='queued' ORDER BY created_at LIMIT 8").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE source=? AND status='queued' ORDER BY created_at LIMIT 8",
+                (self.source,),
+            ).fetchall()
         for row in rows:
             with self.lock:
                 client = self.client
@@ -293,12 +313,7 @@ class RuntimeDaemon:
                 return {"released": False, "error": "Codex 常驻服务暂未就绪。"}
             if sid in self.active or sid in self.releasing:
                 return {"released": False, "error": "会话正在处理，请稍后再释放。"}
-            with self.service.db() as conn:
-                queued = conn.execute(
-                    "SELECT 1 FROM jobs WHERE source='codex' AND session=? AND status='queued'",
-                    (sid,),
-                ).fetchone()
-            if queued:
+            if self.has_queued_job(sid):
                 return {"released": False, "error": "会话还有待执行的消息，请等任务结束。"}
             if sid not in self.loaded:
                 return {"released": True}
@@ -319,23 +334,31 @@ class RuntimeDaemon:
                 self.releasing.pop(sid, None)
         return {"released": False, "error": "暂未确认会话已释放，请稍后重试。"}
 
+    def has_queued_job(self, sid):
+        with self.service.db() as conn:
+            return conn.execute(
+                "SELECT 1 FROM jobs WHERE source=? AND session=? AND status='queued'",
+                (self.source, sid),
+            ).fetchone() is not None
+
     def _recover(self):
         with self.lock:
             client, self.client = self.client, None
-            if client:
-                client.close()
-            with self.service.db() as conn:
-                conn.execute("UPDATE jobs SET status='unknown',message=?,updated_at=? WHERE source='codex' AND status IN ('starting','running')",
-                             ("Codex 常驻服务连接中断，结果待确认。请先查看会话历史，不要重复提交。", int(time.time()*1000)))
             self.active.clear()
             self.loaded.clear()
+        if client:
+            client.close()
+        with self.service.db() as conn:
+            conn.execute("UPDATE jobs SET status='unknown',message=?,updated_at=?,pid=NULL WHERE source=? AND status IN ('starting','running')",
+                         (f"{self.runtime_name} 常驻服务连接中断，结果待确认。请先查看会话历史，不要重复提交。",
+                          int(time.time()*1000), self.source))
 
     def run(self):
         root = self.service.db_path.parent
-        with (root / "runtime.lock").open("a") as lease:
-            os.chmod(root / "runtime.lock", 0o600)
+        with (root / (self.socket_stem + ".lock")).open("a") as lease:
+            os.chmod(root / (self.socket_stem + ".lock"), 0o600)
             fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            path = root / "runtime.sock"
+            path = root / (self.socket_stem + ".sock")
             if path.exists():
                 path.unlink()
             owner = self
@@ -370,11 +393,12 @@ class RuntimeDaemon:
                     if not self.client or self.client.closed.is_set():
                         self._recover()
                         try:
-                            client = AppServerClient(self.service.codex, root / "app-server.stderr.log", self.notification)
+                            client = self.client_type(self.binary(), root / self.stderr_name, self.notification)
                             with self.lock:
                                 self.client = client
-                            self.record("app_server_started", pid=client.proc.pid)
-                        except Exception:
+                            self.record("runtime_started", source=self.source, pid=client.proc.pid)
+                        except Exception as exc:
+                            self.record("runtime_start_failed", source=self.source, error=str(exc)[:2000])
                             self.stop_event.wait(3)
                             continue
                     self.dispatch()

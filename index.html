@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <title>工作台</title>
 <link rel="manifest" href="manifest.webmanifest" />
-<link rel="stylesheet" href="styles.css?v=20261104-projects1" />
+<link rel="stylesheet" href="styles.css?v=20261104-acp2" />
 </head>
 <body>
 
@@ -195,11 +195,16 @@
 
 <dialog id="newChatDialog" class="new-chat">
   <form id="newChatForm">
-    <h3>新建 Codex 聊天</h3>
+    <h3>新建聊天</h3>
+    <label for="newChatSource">客户端</label>
+    <select id="newChatSource">
+      <option value="codex">Codex</option>
+      <option value="dsh">DeepSeek Harness</option>
+    </select>
     <label for="newChatProject">项目</label>
     <select id="newChatProject"></select>
     <label for="newChatText">第一条消息</label>
-    <textarea id="newChatText" rows="3" maxlength="12000" required placeholder="输入你想让 Codex 做的事"></textarea>
+    <textarea id="newChatText" rows="3" maxlength="12000" required placeholder="输入第一条消息"></textarea>
     <p id="newChatStatus" role="status"></p>
     <div class="new-chat__actions">
       <button type="button" id="closeNewChat">关闭</button>
@@ -210,6 +215,6 @@
 </dialog>
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20261104-projects1"></script>
+<script src="app.js?v=20261104-acp2"></script>
 </body>
 </html>

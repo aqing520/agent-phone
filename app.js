@@ -974,6 +974,7 @@ async function loadControl(){
     controlUI.csrf = null;
   }
   updateSendState();
+  if($('#newChatDialog').open) updateNewChat();
 }
 
 function applySendJob(p, job){
@@ -1088,6 +1089,7 @@ let newChatPending = null, newChatBusy = false;
 try{ newChatPending = JSON.parse(localStorage.getItem(NEW_CHAT_STORAGE) || 'null'); }catch(e){}
 
 function showNewChat(project){
+  $('#newChatSource').value = newChatPending?.source || 'codex';
   const select = $('#newChatProject');
   select.replaceChildren(new Option('默认工作台项目', ''));
   for(const p of projectList()){
@@ -1105,28 +1107,38 @@ function showNewChat(project){
   }
   updateNewChat();
   $('#newChatDialog').showModal();
+  if(!controlUI.csrf) loadControl();
 }
 
 function updateNewChat(){
+  const source = $('#newChatSource');
+  for(const option of source.options){
+    option.disabled = !controlUI.sources?.[option.value]?.available;
+  }
+  if(!newChatPending && !controlUI.sources?.[source.value]?.available){
+    const available = [...source.options].find(option=>!option.disabled);
+    if(available) source.value = available.value;
+  }
+  source.disabled = !!newChatPending;
   $('#newChatProject').disabled = !!newChatPending;
   $('#newChatText').readOnly = !!newChatPending;
-  $('#submitNewChat').disabled = newChatBusy;
+  $('#submitNewChat').disabled = newChatBusy || (!newChatPending && !controlUI.sources?.[$('#newChatSource').value]?.available);
   $('#submitNewChat').textContent = newChatPending ? '查看创建结果' : '创建并发送';
 }
 
 async function openCreatedChat(job){
   if(job.session !== job.id){
-    const data = await controlFetch('/api/messages?session='+encodeURIComponent(job.session)+'&source=codex');
+    const data = await controlFetch('/api/messages?session='+encodeURIComponent(job.session)+'&source='+encodeURIComponent(job.source));
     if(!data.error){
       const pending = newChatPending;
-      const key = sendKey('codex', job.session);
+      const key = sendKey(job.source, job.session);
       controlUI.pending.set(key, { ...job, text:pending.text });
       if(job.status === 'failed') controlUI.drafts.set(key, pending.text);
       persistSends();
       clearNewChat();
       $('#newChatDialog').close();
       $('#sessMask').classList.remove('is-open');
-      await loadRealSession(job.session, 'codex');
+      await loadRealSession(job.session, job.source);
       loadSessions().then(renderProjects);
       return;
     }
@@ -1165,11 +1177,12 @@ async function createChat(event){
   updateNewChat();
   try{
     if(!controlUI.csrf) await loadControl();
-    if(!controlUI.sources?.codex?.available) throw new Error('Codex 常驻服务未就绪。');
+    const source = newChatPending?.source || $('#newChatSource').value;
+    if(!newChatPending && !controlUI.sources?.[source]?.available) throw new Error('所选客户端的常驻服务未就绪。');
     if(!newChatPending){
       const text = $('#newChatText').value.trim();
       if(!text) return;
-      const request = {requestId:newRequestId(), source:'codex', project:$('#newChatProject').value, text};
+      const request = {requestId:newRequestId(), source, project:$('#newChatProject').value, text};
       localStorage.setItem(NEW_CHAT_STORAGE, JSON.stringify(request));
       newChatPending = request;
     }
@@ -1201,16 +1214,17 @@ async function pollNewChat(){
 
 async function releaseSession(){
   const session = state.realSessionId;
-  const key = sendKey('codex', session);
-  if(state.realSessionSource !== 'codex' || !session || controlUI.submitting.has(key)) return;
+  const source = state.realSessionSource;
+  const key = sendKey(source, session);
+  if(!controlUI.sources?.[source]?.release || !session || controlUI.submitting.has(key)) return;
   controlUI.submitting.add(key);
   updateSendState();
   try{
     await controlFetch('/api/sessions/release', {
       method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
-      body:JSON.stringify({session}),
+      body:JSON.stringify({session, source}),
     });
-    toast('手机端已释放会话，请在 Mac 桌面点重试。');
+    toast('手机端已释放会话，可以回 Mac 继续。');
   }catch(e){
     toast(e.message);
   }finally{
@@ -1242,7 +1256,7 @@ function updateSendState(){
   $('#sendStatus').classList.toggle('is-error', (!controlUI.submitting.has(key) && ['failed','unknown','unconfirmed'].includes(p?.status)) || controlUI.errors.has(key));
   $('#btnCheckSend').hidden = p?.status !== 'unconfirmed' || controlUI.submitting.has(key);
   $('#btnAcknowledgeSend').hidden = p?.status !== 'unknown';
-  $('#btnReleaseSession').hidden = !(available && a.source === 'codex');
+  $('#btnReleaseSession').hidden = !(available && capability?.release);
   $('#btnReleaseSession').disabled = busy;
 }
 
@@ -1283,6 +1297,7 @@ function bind(){
   $('#btnNewChat').addEventListener('click', ()=>showNewChat());
   $('#closeNewChat').addEventListener('click', ()=>$('#newChatDialog').close());
   $('#newChatForm').addEventListener('submit', createChat);
+  $('#newChatSource').addEventListener('change', updateNewChat);
   $$('[data-heat-mode]').forEach(button=>button.addEventListener('click', ()=>{
     heatMode = button.dataset.heatMode;
     $$('[data-heat-mode]').forEach(b=>b.setAttribute('aria-pressed', String(b === button)));

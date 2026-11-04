@@ -10,10 +10,10 @@
 ## 当前进度（2026-11-04，优先于下文初始调研）
 
 - **网络通道已部署并验证**：手机 WireGuard → 自有阿里云服务器 → SSH 反向隧道 → Mac 回环网关。已确认手机握手、UDP 公网入站、云端到 Mac 看板及只读接口正常。
-- **常驻已实现**：Mac 使用三个用户级 LaunchAgent 管理网关、隧道和 Codex 控制器，控制器维护官方 app-server；服务器使用 systemd 管理 WireGuard。Mac 需保持登录、联网且不休眠。
+- **常驻已实现**：Mac 使用用户级 LaunchAgent 管理网关、隧道及两个控制器，分别维护 Codex app-server 和 DeepSeek ACP；服务器使用 systemd 管理 WireGuard。Mac 需保持登录、联网且不休眠。
 - **访问边界**：看板不在公网监听；手机密钥认证，专用 SSH 账号限制转发地址和端口；尚无应用层 Token 或登录。中转服务器是受信任端点，并非端到端加密中继。
 - **Codex 连续“写”已接通**：用户选择手机使用 CLI 能力，当前已升级到官方 app-server 常驻模式。首次恢复会话，后续直接开始新轮次；已验证两轮复用同一 PID 与上下文、网关重启不影响会话、app-server 重启后恢复历史。持久化请求编号、状态查询和浏览器发送继续复用，详情见 [README](../README.md)。
-- **Codex 首轮入口实测**：`codex queue` 在当前环境可入队但不能自动启动空闲桌面会话；`--resume` 因默认共享 daemon 不存在而警告，退出码仍为 0。桌面 app-tools 发送接口已成功启动原测试会话，但独立网关不能复用其连接，所以首版改用 CLI 续接。桌面实时桥接和交互式审批待实现，详见 [验证记录](CODEX-CONTROL.md)。WorkBuddy、DeepSeek 的适配仍在后续范围内。
+- **Codex 首轮入口实测**：`codex queue` 在当前环境可入队但不能自动启动空闲桌面会话；`--resume` 因默认共享 daemon 不存在而警告，退出码仍为 0。桌面 app-tools 发送接口已成功启动原测试会话，但独立网关不能复用其连接，所以首版改用 CLI 续接。桌面实时桥接和交互式审批待实现，详见 [验证记录](CODEX-CONTROL.md)。DeepSeek ACP 发送已接入，WorkBuddy 适配仍待验证。
 - **与桌面的边界**：共享历史但存在单写入者锁，其他客户端空闲也可能占用。拒绝忙碌或写入冲突，不强抢、不自动创建会话副本；不提供桌面实时同步或手机权限审批。常驻控制器不依赖当前聊天的工具连接。
 - 下文保留初始方案比较和候选入口作为调研记录，不代表当前部署或控制能力已验证。网络实施以 [README](../README.md) 和 [私人远程访问](PRIVATE-NETWORK.md) 为准。
 
@@ -45,15 +45,15 @@
 
 ## 二、输入/控制问题：手机发消息 → Mac 上的智能体干活
 
-### 现状（2026-11-03 查证）
-- 发送框是占位：`app.js` 的 `send()` 只弹 toast「发送通道尚未接入网关」。
-- 各客户端有无"注入消息"接口（逐一验证过）：
+### 控制入口
+
+DeepSeek Harness 与 WorkBuddy 的当前证据及后续验证见 [控制调研](OTHER-AGENT-CONTROL.md)。
 
 | 客户端 | 控制可行性 | 入口 |
 |--------|-----------|------|
 | Codex | 官方 app-server 常驻发送已实现 | 连续多轮共用进程与会话，HTTP / 浏览器发送、防重复和重启恢复已验证；其他进程占用时明确失败。桌面实时桥接、忙碌时排队和手机审批待做，见 [验证记录](CODEX-CONTROL.md) |
-| DeepSeek Harness | ⚠️ 无 CLI | `/Applications/DeepSeek Harness.app` 是纯 GUI（包内无命令行），只能 AppleScript 模拟键入（需辅助功能授权、App 在前台），可靠性一般 |
-| WorkBuddy | ⚠️ 无注入接口 | **官方手机 App 才是正解**：v2.7.0+ 有远程下任务 + 远程控制电脑（2026-10-28 上线），要求 Mac 端 ≥5.9.3（本机满足）；"设置 → 设备连接"开启同账号远程连接，不耗 Token |
+| DeepSeek Harness | 官方 ACP 发送已实现 | 手机网页可新建、续聊、查看回复及释放会话 |
+| WorkBuddy | 官方移动端支持续聊；第三方入口待验证 | 本地助理 Open API 支持 OAuth 授权后发送及查回复。公开请求尚未提供任意旧会话的目标参数 |
 | Claude / Antigravity | 未接入 | 无本地用量日志，控制也无从谈起 |
 
 ### 开源项目可抄的点
@@ -62,7 +62,7 @@
 |------|------|-------|--------|
 | Happy | github.com/slopus/happy | ~24k | ① 端到端加密方案（AES-256-GCM + NaCl secretbox，每会话独立密钥，中继只见密文）；② `happy codex` 包装器思路：本地 wrapper 接管 CLI 会话，手机/电脑随时交接控制权；③ 推送通知（等授权/报错时弹通知） |
 | T3 Code | github.com/pingdotgg/t3code | ~38k | ① "agent harness 控制台"定位：一个入口管本机所有 agent，复用现有订阅；② 权限模式/多账号管理的产品化设计 |
-| jep | github.com/tinybigai/jep | 新 | ① HarnessAdapter 抽象：一个 daemon 统一适配 codex/claude/opencode；② 自带 macOS launchd 安装脚本（`scripts/install.sh`）可直接参考；③ Telegram 机器人也能当客户端（不用装 App 的控制通道） |
+| jep | github.com/tinybig-ai/jep | 新 | ① HarnessAdapter 抽象：一个 daemon 统一适配 codex/claude/opencode；② 自带 macOS launchd 安装脚本（`scripts/install.sh`）可直接参考；③ Telegram 机器人也能当客户端（不用装 App 的控制通道） |
 | MobileCLI | github.com/bigph00t/MobileCLI | — | ① PTY 流式方案（终端原样串到手机，审批按钮识别各 CLI 的确认提示）；② pairing QR 配对 + Tailscale/LAN 双模式 |
 | agentsview | 已克隆在 `reference/agentsview` | — | 只读看板的日志解析（已吸收进 server.py） |
 

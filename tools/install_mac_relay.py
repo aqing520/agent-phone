@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import time
 
@@ -57,6 +58,17 @@ def main():
             ],
         },
     }
+    bundled_dsh = Path("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
+    dsh = shutil.which("dsh") or (str(bundled_dsh) if os.access(bundled_dsh, os.X_OK) else None)
+    if dsh:
+        jobs["local.agent-phone.dsh"] = {
+            "ProgramArguments": ["/usr/bin/python3", str(root / "dsh_runtime.py"), "--dsh", dsh],
+            "WorkingDirectory": str(root),
+            "EnvironmentVariables": {
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                "PYTHONUNBUFFERED": "1",
+            },
+        }
     domain = f"gui/{os.getuid()}"
     for label, settings in jobs.items():
         path = agents / (label + ".plist")

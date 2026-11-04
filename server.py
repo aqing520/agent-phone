@@ -35,7 +35,7 @@ from control import ControlService, ControlError
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKBUDDY = os.path.expanduser("~/.workbuddy")
 CODEX = os.path.expanduser("~/.codex")
-DSH = os.path.expanduser("~/.dsh")
+DSH = os.path.expanduser(os.environ.get("DSH_HOME") or "~/.dsh")
 HOST = os.environ.get("AGENT_PHONE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AGENT_PHONE_PORT", "5173"))
 STATIC_FILES = {
@@ -1029,6 +1029,18 @@ def get_sessions():
         return _cache2["data"]
 
 
+def find_control_session(sid, source):
+    if source == "codex":
+        return find_codex_file(sid)
+    if source == "dsh" and dsh_session_dir(sid):
+        cache_file = os.path.join(DSH, "storages", "session_projcache", "sessions", sid + ".json")
+        try:
+            return _dsh_meta(cache_file)["cwd"]
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def resolve_new_workspace(project):
     if project == "":
         return ROOT
@@ -1103,7 +1115,8 @@ class Handler(SimpleHTTPRequestHandler):
             payload = self._read_post()
             if path == "/api/sessions/release":
                 session = payload.get("session") if isinstance(payload, dict) else None
-                self._json(get_control_service().release(session))
+                source = payload.get("source", "codex") if isinstance(payload, dict) else "codex"
+                self._json(get_control_service().release(session, source))
                 return
             if path == "/api/jobs/acknowledge":
                 if not isinstance(payload, dict) or not isinstance(payload.get("requestId"), str):
@@ -1111,7 +1124,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json({"job": get_control_service().acknowledge(payload["requestId"])})
                 return
             job = get_control_service().submit(
-                payload, lambda sid, source: find_codex_file(sid) if source == "codex" else None,
+                payload, find_control_session,
                 resolve_new_workspace,
             )
             self._json({"job": job}, 202)

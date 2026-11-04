@@ -1,4 +1,4 @@
-"""Durable message jobs dispatched by the persistent Codex app-server runtime."""
+"""Durable message jobs dispatched by local agent runtimes."""
 from contextlib import contextmanager
 import hashlib
 import json
@@ -14,6 +14,8 @@ import uuid
 ACTIVE = ("queued", "starting", "running")
 MAX_MESSAGE = 12000
 DATA_DIR = Path.home() / ".config" / "agent-phone" / "control"
+BUNDLED_DSH = Path("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
+RUNTIME_SOCKETS = {"codex": "runtime.sock", "dsh": "dsh-runtime.sock"}
 
 
 class ControlError(Exception):
@@ -57,19 +59,21 @@ def session_context(path, with_policy=False):
 
 
 class ControlService:
-    def __init__(self, db_path=None, codex=None, enabled=True):
+    def __init__(self, db_path=None, codex=None, enabled=True, dsh=None):
         self.db_path = Path(db_path) if db_path else DATA_DIR / "jobs.sqlite"
         self.codex = codex or shutil.which("codex")
+        self.dsh = dsh or shutil.which("dsh") or (str(BUNDLED_DSH) if os.access(BUNDLED_DSH, os.X_OK) else None)
         self.enabled = enabled
         self.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.db_path.parent.chmod(0o700)
         with self.db() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, source TEXT NOT NULL, session TEXT NOT NULL,
                 fingerprint TEXT NOT NULL, text TEXT NOT NULL, cwd TEXT NOT NULL,
                 rollout TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
-                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pid INTEGER
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pid INTEGER, turn_id TEXT
             )""")
             columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
             if "turn_id" not in columns:
@@ -86,11 +90,11 @@ class ControlService:
         finally:
             conn.close()
 
-    def runtime_call(self, method="status", **params):
+    def runtime_call(self, method="status", *, source="codex", **params):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(14 if method == "release" else 2)
-                sock.connect(str(self.db_path.parent / "runtime.sock"))
+                sock.connect(str(self.db_path.parent / RUNTIME_SOCKETS[source]))
                 sock.sendall((json.dumps({"method": method, **params}) + "\n").encode())
                 data = b""
                 while b"\n" not in data and len(data) < 65536:
@@ -103,7 +107,7 @@ class ControlService:
         except (OSError, ValueError):
             return {"ready": False}
 
-    def release(self, session):
+    def release(self, session, source="codex"):
         if not self.enabled:
             raise ControlError("unsupported_source", "当前网关未启用会话控制。", 403)
         try:
@@ -111,7 +115,9 @@ class ControlService:
                 raise ValueError()
         except ValueError:
             raise ControlError("invalid_id", "会话标识无效。")
-        result = self.runtime_call("release", session=session)
+        if not isinstance(source, str) or source not in RUNTIME_SOCKETS:
+            raise ControlError("unsupported_source", "此客户端尚未接通会话控制。", 501)
+        result = self.runtime_call("release", source=source, session=session)
         if not result.get("released"):
             raise ControlError("release_pending", result.get("error", "暂未确认会话已释放，请稍后重试。"), 409)
         return result
@@ -119,17 +125,22 @@ class ControlService:
     def capabilities(self):
         runtime = self.runtime_call() if self.enabled and self.codex else {"ready": False}
         ready = bool(runtime.get("ready"))
+        dsh_ready = self.enabled and bool(self.dsh and self.runtime_call(source="dsh").get("ready"))
+        dsh_reason = ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
+                      "Mac 未找到 DeepSeek Harness CLI。" if not self.dsh else
+                      "DeepSeek Harness 常驻服务尚未就绪。" if not dsh_ready else
+                      "DeepSeek Harness 已连接，可连续发送消息。")
         reason = ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
                   "Mac 未找到 Codex CLI。" if not self.codex else
                   "Codex 常驻服务尚未就绪，正在等待连接。" if not ready else
                   "Codex 常驻会话已连接，可连续发送消息。")
         return {
             "codex": {"available": bool(self.codex) and self.enabled and ready,
-                      "mode": "app-server", "reason": reason,
+                      "mode": "app-server", "reason": reason, "release": ready,
                       "note": "同一会话一次执行一条消息；需要额外权限时请回 Mac 处理。",
                       "runtime": {k: runtime.get(k) for k in ("ready", "appServerPid", "loadedSessions")}},
             "workbuddy": {"available": False, "reason": "WorkBuddy 发送入口尚未接通。"},
-            "dsh": {"available": False, "reason": "DeepSeek Harness 发送入口尚未接通。"},
+            "dsh": {"available": dsh_ready, "mode": "acp", "reason": dsh_reason, "release": dsh_ready},
         }
 
     @staticmethod
@@ -209,7 +220,7 @@ class ControlService:
                 return self.get(job_id)
         capability = self.capabilities().get(source)
         if not capability or not capability["available"]:
-            code = "runtime_unavailable" if source == "codex" and self.enabled and self.codex else "unsupported_source"
+            code = "runtime_unavailable" if self.enabled and {"codex": self.codex, "dsh": self.dsh}.get(source) else "unsupported_source"
             raise ControlError(code, (capability or {}).get("reason", "此客户端尚未接通发送。"), 503 if code == "runtime_unavailable" else 501)
         if new_chat:
             if not resolve_workspace:
@@ -219,7 +230,13 @@ class ControlService:
             path = find_session(sid, source)
             if not path:
                 raise ControlError("session_not_found", "没有找到这段本机会话，请刷新会话列表。", 404)
-            cwd = session_context(path)
+            if source == "dsh":
+                cwd = path
+                if not os.path.isabs(cwd) or not os.path.isdir(cwd):
+                    raise ControlError("workspace_missing", "原会话的项目目录不存在，请先在 Mac 上确认。", 409)
+                cwd = os.path.realpath(cwd)
+            else:
+                cwd = session_context(path)
         now = int(time.time() * 1000)
         with self.db() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -237,5 +254,5 @@ class ControlService:
                          (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None))
         # Wake is only a hint. The runtime also polls durable queued jobs, so losing
         # this IPC response never means the user message should be submitted again.
-        self.runtime_call("wake")
+        self.runtime_call("wake", source=source)
         return self.get(job_id)

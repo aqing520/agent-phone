@@ -16,7 +16,7 @@ python3 server.py
 
 ## 网络方案：WireGuard + SSH 反向隧道
 
-截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 消息发送使用官方 app-server 常驻模式，见下文。
+截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 和 DeepSeek Harness 通过各自的 Mac 常驻进程执行手机发来的消息。
 
 ```text
 手机浏览器：http://10.77.73.1:5173
@@ -45,7 +45,7 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 ### 部署与使用
 
 - 服务器安装脚本：`tools/setup_private_relay.sh`；云安全组放行入站 UDP 51820，SSH 需可达。不开放公网 TCP 5173。
-- Mac 安装脚本：`tools/install_mac_relay.py`；安装 `local.agent-phone.codex`、`local.agent-phone.gateway` 和 `local.agent-phone.tunnel` 三个 LaunchAgent，用户登录后启动，进程退出后重新启动。
+- Mac 安装脚本：`tools/install_mac_relay.py`；安装 `local.agent-phone.codex`、`local.agent-phone.gateway` 和 `local.agent-phone.tunnel` 三个基础 LaunchAgent；检测到 DeepSeek Harness CLI 时另外安装 `local.agent-phone.dsh`。
 - 手机导入独立 WireGuard 配置，开启连接后打开 `http://10.77.73.1:5173`。不修改手机 DNS，也不接管其他上网流量。
 - 私钥、手机配置、二维码保存在仓库之外，不提交到 GitHub。换服务器需要迁移隧道，并更新手机配对配置。
 
@@ -65,9 +65,9 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 - 最近项目按工作目录归组，点项目可查看它的历史会话。会话正文支持 Markdown。
 - 用量每 30 秒刷新，当前会话每 4 秒轮询。
 - 移动端布局及主屏幕图标配置。
-- 手机可选择已有项目或默认工作台目录，新建 Codex 聊天并发送首条消息。已有 Codex 会话支持连续发送、后台执行状态和重复提交保护。
+- 手机可选择已有项目或默认工作台目录，新建 Codex 或 DeepSeek Harness 聊天并发送首条消息。两者均支持连续发送、后台执行状态和重复提交保护。
 
-WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚未实现。
+WorkBuddy 发送、交互式权限审批和完成通知尚未实现。
 
 ## 发送消息：Codex 常驻会话
 
@@ -119,7 +119,16 @@ python3 tools/test_gateway_http.py
 node --check app.js
 ```
 
-已实测连续两轮共用同一个 Codex PID、只恢复一次会话并记住上一轮内容；重启 HTTP 网关后该 PID 保持不变；受控重启 app-server 后可从历史恢复上下文。浏览器回执丢失重试、重复提交和原会话回复展示也已验证。入口调研及版本限制见 [Codex 发送验证](docs/CODEX-CONTROL.md)。下一步分别接入 WorkBuddy、DeepSeek Harness，再考虑审批与桌面实时同步。
+已实测连续两轮共用同一个 Codex PID、只恢复一次会话并记住上一轮内容；重启 HTTP 网关后该 PID 保持不变；受控重启 app-server 后可从历史恢复上下文。浏览器回执丢失重试、重复提交和原会话回复展示也已验证。入口调研及版本限制见 [Codex 发送验证](docs/CODEX-CONTROL.md)。WorkBuddy 的官方发送入口仍待授权验证，见 [控制调研](docs/OTHER-AGENT-CONTROL.md)。
+
+## 发送消息：DeepSeek Harness
+
+手机在「新建聊天」里选择 DeepSeek Harness，或从会话历史打开已有对话。Mac 服务通过官方 `dsh acp` 发送消息，页面从本机会话日志读取回复。
+
+- 已有会话沿用原工作目录。其他进程持有会话时，手机会提示占用。发送完成后可点「释放会话」，让其他进程接手。
+- 手机端会取消 ACP 权限请求。连接中断或缺少轮次结束记录时，页面会显示「结果待确认」。
+- 安装脚本会查找 PATH 中的 `dsh` 或官方桌面包内的 CLI。已有私人网络部署可重新运行安装脚本加入 DeepSeek 服务。
+- DeepSeek 的进程标准错误保存在 `~/.config/agent-phone/control/dsh-acp.stderr.log`。
 
 ## 结构
 

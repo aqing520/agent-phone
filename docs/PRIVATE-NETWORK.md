@@ -32,7 +32,7 @@ python3 tools/install_mac_relay.py <服务器IP> --key ~/.ssh/id_ed25519_agent_p
 
 ## 运行与排查
 
-- Mac 的三个 LaunchAgent：`local.agent-phone.gateway`（网页网关）、`local.agent-phone.tunnel`（SSH 隧道）、`local.agent-phone.codex`（常驻控制器及其官方 app-server 子进程），用户登录后启动，退出后自动重启；启动日志在 `~/Library/Logs/agent-phone/`。
+- Mac 的基础 LaunchAgent 包括`local.agent-phone.gateway`（网页网关）、`local.agent-phone.tunnel`（SSH 隧道）、`local.agent-phone.codex`（常驻控制器及其官方 app-server 子进程）。如已安装 DeepSeek Harness CLI，安装脚本还会配置 `local.agent-phone.dsh`。这些服务在用户登录后启动，退出后自动重启；启动日志在 `~/Library/Logs/agent-phone/`。
 - Mac 必须保持开机、已登录、联网且不休眠。LaunchAgent 不是登录前的系统服务。
 - 服务器服务：`systemctl status wg-quick@apwg0`；查看握手：`wg show apwg0`，不要使用会显示私钥的 `wg showconf` 或 `wg show all dump`。
 - 连接开关打开不等于握手成功。如果没有最近握手，检查公网 UDP 51820 的云防火墙规则以及手机网络。

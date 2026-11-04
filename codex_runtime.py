@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+from uuid import UUID
 import signal
 import socketserver
 import subprocess
@@ -208,7 +209,22 @@ class RuntimeDaemon:
         try:
             with self.lock:
                 loaded = sid in self.loaded
-            if not loaded:
+            if not row["rollout"]:
+                result = client.request("thread/start", {
+                    "cwd": row["cwd"], "approvalPolicy": "never", "sandbox": "workspace-write",
+                })
+                new_sid = result.get("thread", {}).get("id")
+                if not isinstance(new_sid, str) or str(UUID(new_sid)) != new_sid:
+                    raise RpcError("Unexpected new thread id")
+                with self.lock:
+                    if self.client is not client or client.closed.is_set():
+                        raise ConnectionError("Runtime changed")
+                    with self.service.db() as conn:
+                        conn.execute("UPDATE jobs SET session=? WHERE id=?", (new_sid, row["id"]))
+                    self.active[new_sid] = self.active.pop(sid)
+                    self.loaded.add(new_sid)
+                    sid = new_sid
+            elif not loaded:
                 _, sandbox = session_context(row["rollout"], with_policy=True)
                 result = client.request("thread/resume", {
                     "threadId": sid, "cwd": row["cwd"], "approvalPolicy": "never",

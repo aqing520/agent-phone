@@ -178,10 +178,13 @@ class ControlService:
         self.update(job_id, "interrupted", "已确认并结束这条记录。没有自动重新发送。")
         return self.get(job_id)
 
-    def submit(self, payload, find_session):
+    def submit(self, payload, find_session, resolve_workspace=None):
         if not isinstance(payload, dict):
             raise ControlError("invalid_request", "请求必须是 JSON 对象。")
         source, sid, text, job_id = (payload.get(k) for k in ("source", "session", "text", "requestId"))
+        new_chat = "project" in payload
+        if new_chat:
+            sid = job_id
         try:
             if not isinstance(job_id, str) or str(uuid.UUID(job_id)) != job_id:
                 raise ValueError()
@@ -194,7 +197,10 @@ class ControlService:
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE:
             raise ControlError("invalid_text", f"消息不能为空，且最多 {MAX_MESSAGE} 字。")
         text = text.strip()
-        fingerprint = hashlib.sha256(json.dumps([source, sid, text], ensure_ascii=False).encode()).hexdigest()
+        identity = [source, sid, text]
+        if new_chat:
+            identity.append(payload["project"])
+        fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
         with self.db() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row:
@@ -205,10 +211,15 @@ class ControlService:
         if not capability or not capability["available"]:
             code = "runtime_unavailable" if source == "codex" and self.enabled and self.codex else "unsupported_source"
             raise ControlError(code, (capability or {}).get("reason", "此客户端尚未接通发送。"), 503 if code == "runtime_unavailable" else 501)
-        path = find_session(sid, source)
-        if not path:
-            raise ControlError("session_not_found", "没有找到这段本机会话，请刷新会话列表。", 404)
-        cwd = session_context(path)
+        if new_chat:
+            if not resolve_workspace:
+                raise ControlError("invalid_project", "新建会话需要选择项目。")
+            cwd, path = resolve_workspace(payload["project"]), ""
+        else:
+            path = find_session(sid, source)
+            if not path:
+                raise ControlError("session_not_found", "没有找到这段本机会话，请刷新会话列表。", 404)
+            cwd = session_context(path)
         now = int(time.time() * 1000)
         with self.db() as conn:
             conn.execute("BEGIN IMMEDIATE")

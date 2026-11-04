@@ -61,13 +61,13 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 
 ## 已有功能
 
-- 用量统计、活跃热力图和客户端看板。
-- 最近项目、历史会话与 Markdown 正文展示。
+- Token 活动按天或周展示近一年各已接入客户端的合计用量，颜色从浅蓝到深蓝。缺少逐次时间的用量按会话日期归入。
+- 最近项目按工作目录归组，点项目可查看它的历史会话。会话正文支持 Markdown。
 - 用量每 30 秒刷新，当前会话每 4 秒轮询。
 - 移动端布局及主屏幕图标配置。
-- Codex 常驻会话连续发送、后台执行状态、重复提交保护和失败提示。
+- 手机可选择已有项目或默认工作台目录，新建 Codex 聊天并发送首条消息。已有 Codex 会话支持连续发送、后台执行状态和重复提交保护。
 
-WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚未实现。断连时部分用量界面仍会显示演示数据。
+WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚未实现。
 
 ## 发送消息：Codex 常驻会话
 
@@ -77,7 +77,8 @@ WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚
 浏览器 POST /api/send（请求编号 + 会话 + 消息）
   → 私人网络 → Mac 网关校验并保存任务
   → 常驻控制器 → 官方 codex app-server（stdio JSON-RPC）
-      首次接入：thread/resume；后续每轮：turn/start
+      新建聊天：thread/start；接入历史会话：thread/resume
+      每轮发送：turn/start
       完成回执：turn/completed
   → 原会话历史 → /api/messages → 浏览器
 ```
@@ -104,7 +105,7 @@ WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/control` | 查询发送能力、防跨站请求令牌和常驻服务健康状态 |
-| `POST /api/send` | 以唯一请求编号提交消息；相同编号与内容重复提交返回原任务 |
+| `POST /api/send` | 以唯一请求编号提交消息，传入 `session` 接续会话，或传入 `project` 新建会话。重复提交返回原任务 |
 | `GET /api/jobs?id=<请求编号>` | 查询执行状态 |
 | `POST /api/jobs/acknowledge` | 用户核对结果后结束一条不明确的记录，不自动重发 |
 

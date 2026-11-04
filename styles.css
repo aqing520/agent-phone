@@ -147,24 +147,29 @@ body{ display: flex; justify-content: center; }
 .chev{ width: 15px; height: 15px; color: #C9C9D6; flex: 0 0 auto; }
 
 /* ============ 热力图 ============ */
-.heatmap{
-  display: grid;
-  grid-template-columns: repeat(21, 1fr);
-  gap: 4px;
-  margin-bottom: 14px;
-}
-.hm-cell{
-  aspect-ratio: 1 / 1;
-  border-radius: 3px;
-  background: #EFEDF7;
-  transition: transform .12s;
-}
-.hm-cell.l1{ background: #DED6F7; }
-.hm-cell.l2{ background: #BCACEF; }
-.hm-cell.l3{ background: #9382E4; }
-.hm-cell.l4{ background: #D2764F; }
-.hm-cell.is-hot{ box-shadow: 0 0 0 1.5px rgba(210,118,79,.35); }
-.hm-cell:active{ transform: scale(.82); }
+.hm-scroll{ overflow-x:auto; padding-bottom:4px; }
+.heatmap{ display:flex; gap:3px; width:max-content; }
+.hm-week{ display:grid; gap:3px; width:11px; }
+.hm-cell{ width:11px; height:11px; padding:0; border:0; border-radius:3px; background:#eff2f6; cursor:pointer; }
+.hm-cell.l1{ background:#d3eaff; }
+.hm-cell.l2{ background:#9dcefb; }
+.hm-cell.l3{ background:#559fec; }
+.hm-cell.l4{ background:#165db6; }
+.hm-cell.l5{ background:#081c38; }
+.hm-cell:disabled{ cursor:default; }
+.hm-month{ height:15px; font-size:9px; white-space:nowrap; color:var(--ink-3); }
+.hm-modes{ display:flex; gap:8px; }
+.hm-modes button{ border:0; background:none; padding:4px 2px; color:var(--ink-3); font:inherit; font-size:12px; }
+.hm-modes button[aria-pressed="true"]{ color:#165db6; font-weight:700; }
+.hm-note{ color:var(--ink-3); font-size:11px; margin:4px 0 12px; }
+.new-chat{ width:min(420px, calc(100% - 28px)); border:0; border-radius:18px; padding:20px; color:var(--ink); }
+.new-chat::backdrop{ background:#0b173a66; }
+.new-chat form{ display:grid; gap:10px; }
+.new-chat h3,.new-chat p{ margin:0; }
+.new-chat select,.new-chat textarea{ width:100%; font:inherit; border:1px solid #d7ddeb; border-radius:8px; padding:9px; }
+.new-chat__actions{ display:flex; justify-content:flex-end; gap:8px; }
+.new-chat__actions button{ font:inherit; padding:8px 12px; border:0; border-radius:8px; }
+#submitNewChat{ background:#165db6; color:white; }
 
 .statbar{
   display: grid; grid-template-columns: repeat(4, 1fr);

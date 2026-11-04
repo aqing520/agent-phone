@@ -42,6 +42,7 @@ for line in sys.stdin:
  if i=='permissions-check' and m is None:
   send({'method':'turn/completed','params':{'threadId':permission_sid,'turn':{'id':permission_tid,'status':'completed'}}});continue
  if m=='initialize':send({'id':i,'result':{}})
+ elif m=='thread/start':send({'id':i,'result':{'thread':{'id':str(uuid.uuid4())}}})
  elif m=='thread/resume':send({'id':i,'result':{'thread':{'id':p['threadId']}}})
  elif m=='thread/unsubscribe':
   send({'id':i,'result':{'status':'unsubscribed'}})
@@ -105,6 +106,21 @@ for line in sys.stdin:
                 return current
             time.sleep(.05)
         self.fail('worker did not finish')
+
+    def test_create_chat_reuses_request_and_returns_new_session(self):
+        payload = self.payload()
+        del payload['session']
+        payload['project'] = ''
+        def resolve_workspace(project):
+            self.assertEqual(project, '')
+            return str(self.root)
+
+        job = self.finish(self.service.submit(payload, None, resolve_workspace))
+        self.assertEqual(job['status'], 'completed')
+        self.assertNotEqual(job['session'], payload['requestId'])
+        self.assertEqual(self.service.submit(payload, None)['session'], job['session'])
+        self.assertEqual(len(self.methods('thread/start')), 1)
+        self.assertEqual(self.methods('turn/start')[0]['params']['threadId'], job['session'])
 
     def test_worker_and_gateway_restart_do_not_resend(self):
         payload = self.payload('quote " ; $(touch should-not-exist)')

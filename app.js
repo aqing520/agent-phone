@@ -96,14 +96,6 @@ const sessions = {
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 
-function seeded(seed){
-  let s = seed;
-  return () => {
-    s = (s * 1103515245 + 12345) % 2147483648;
-    return s / 2147483648;
-  };
-}
-
 function toast(msg){
   const t = $('#toast');
   t.textContent = msg;
@@ -191,44 +183,52 @@ function md(src){
 function pad2(n){ return n<10 ? '0'+n : ''+n; }
 function dateKey(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 
+let heatDaily, heatMode = 'day';
 function buildHeatmap(daily){
-  // daily: {'YYYY-MM-DD': tokens}；不传则退回 mock 分布
-  const WEEKS = 21, DAYS = 7;
-  const wrap = $('#heatmap');
-  wrap.innerHTML = '';
+  heatDaily = daily;
+  const wrap = $('#heatmap'), scroller = $('#heatScroll');
+  const stayAtEnd = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft < 16;
+  wrap.replaceChildren();
+  const fragment = document.createDocumentFragment();
   const today = new Date();
-  const total = WEEKS * DAYS;
-
-  let max = 0;
-  if(daily) for(const k in daily) max = Math.max(max, daily[k]);
-
-  const rnd = seeded(20261103);
-  for(let i=0; i<total; i++){
-    const d = new Date(today);
-    d.setDate(today.getDate() - (total - 1 - i));
-    const key = dateKey(d);
-    let level = 0, label = '无记录';
-    if(daily){
-      const v = daily[key] || 0;
-      if(v > 0 && max > 0){
-        const r = v / max;
-        level = r > 0.66 ? 4 : r > 0.33 ? 3 : r > 0.12 ? 2 : 1;
-      }
-      label = v ? fmtTok(v) : '无消耗';
-    } else {
-      // mock：越靠右越活跃
-      const recency = Math.pow((i/(total-1)), 2.1);
-      const p = rnd() * (0.22 + recency * 1.25);
-      level = p > 1.02 ? 4 : p > 0.82 ? 3 : p > 0.62 ? 2 : p > 0.42 ? 1 : 0;
-      label = level ? ((level ** 1.7) * (2 + rnd()*9) * 10).toFixed(1) + 'M' : '无消耗';
-    }
-
-    const cell = document.createElement('div');
-    cell.className = 'hm-cell' + (level ? ' l'+level : '') + (level === 4 ? ' is-hot' : '');
-    cell.dataset.tip = `${key.slice(5)} · ${label}`;
-    cell.addEventListener('click', ()=> toast(cell.dataset.tip));
-    wrap.appendChild(cell);
+  today.setHours(0,0,0,0);
+  const first = new Date(today);
+  first.setDate(today.getDate() - ((today.getDay()+6)%7) - 52*7);
+  const buckets = [];
+  for(let week=0; week<53; week++){
+    const days = Array.from({length:7}, (_,day)=>{
+      const date = new Date(first);
+      date.setDate(first.getDate()+week*7+day);
+      return {date, value: daily?.[dateKey(date)] || 0};
+    });
+    buckets.push(heatMode === 'week' ? [{date:days[0].date, value:days.reduce((sum,d)=>sum+d.value,0)}] : days);
   }
+  const peak = Math.max(1,...buckets.flat().map(d=>d.value));
+  for(const days of buckets){
+    const week = document.createElement('div');
+    week.className = 'hm-week';
+    const month = document.createElement('span');
+    month.className = 'hm-month';
+    const start = days[0].date;
+    if(start.getDate() <= 7) month.textContent = (start.getMonth()+1)+'月';
+    for(const {date,value} of days){
+      const cell = document.createElement('button');
+      const level = value ? Math.ceil(5*Math.sqrt(value/peak)) : 0;
+      cell.type = 'button';
+      cell.className = 'hm-cell l'+level;
+      cell.disabled = date > today || !daily;
+      const label = dateKey(date)+(heatMode === 'week' ? ' 起一周' : '')+' · '+value.toLocaleString()+' Token';
+      cell.title = label;
+      cell.setAttribute('aria-label',label);
+      cell.addEventListener('click',()=>toast(label));
+      week.append(cell);
+    }
+    week.append(month);
+    fragment.append(week);
+  }
+  wrap.append(fragment);
+  if(stayAtEnd) scroller.scrollLeft = scroller.scrollWidth;
+  $('#heatNote').textContent = daily ? '全部已接入客户端 · 横向滑动查看过去一年' : '等待本机用量数据';
 }
 
 /* ---------- 真实用量接入 ---------- */
@@ -332,9 +332,9 @@ async function syncUsage(silent){
     usageReady = true;
     applyUsage(u);
     if(!silent && !first) toast('已同步本机用量');
-    if(first && !silent) toast('已接入 WorkBuddy 真实用量');
+    if(first && !silent) toast('已同步各客户端用量');
   } else if(!silent){
-    toast('网关未连接，当前为演示数据');
+    toast('网关未连接，暂时无法同步用量');
   }
   return !!u;
 }
@@ -367,17 +367,20 @@ const SRC_LABEL = { workbuddy: 'WorkBuddy', codex: 'Codex', dsh: 'DeepSeek' };
 
 function renderSessionList(){
   const list = $('#sessList');
-  if(!state.realSessions.length){
+  const group = state.sessionProject;
+  const matches = group ? state.realSessions.filter(s=>projectKey(s) === group.key) : state.realSessions;
+  $('#sessTitle').textContent = group?.name || '会话历史';
+  if(!matches.length){
     $('#sessMeta').textContent = '';
     list.innerHTML = `<div class="sess__empty">未连接到本机网关<br>暂无真实会话记录</div>`;
     return;
   }
-  $('#sessMeta').textContent = state.realSessions.length + ' 条';
+  $('#sessMeta').textContent = matches.length + ' 条';
   // 当前智能体自己的会话排前面，其余来源跟在后面
   const src = (agents[current] || {}).source;
   const rows = src
-    ? [...state.realSessions].sort((a, b)=> (b.source === src) - (a.source === src))
-    : state.realSessions;
+    ? [...matches].sort((a, b)=> (b.source === src) - (a.source === src))
+    : matches;
   list.innerHTML = rows.map(s=>`
     <button class="sess ${s.id === state.realSessionId ? 'is-active' : ''}"
             data-sid="${s.id}" data-src="${s.source || 'workbuddy'}">
@@ -400,7 +403,8 @@ function renderSessionList(){
   });
 }
 
-async function openSessSheet(){
+async function openSessSheet(project = null){
+  state.sessionProject = project;
   renderSessionList();
   $('#sessMask').classList.add('is-open');
   // 每次打开顺手刷新一次列表
@@ -474,13 +478,15 @@ async function loadRealSession(id, source){
 /* ---------- 渲染：最近项目（按 project 聚合真实会话） ---------- */
 const PROJ_MAX = 8;
 
+const projectKey = s => s.projectKey || s.cwd || `unknown:${s.project || '未命名'}`;
+
 function projectList(){
   const map = new Map();
   for(const s of state.realSessions){
-    const key = (s.project || '').trim() || '未命名';
+    const key = projectKey(s);
     let p = map.get(key);
     if(!p){
-      p = { name:key, sessions:0, tokens:0, rounds:0, sources:new Set(), last:0, latest:null };
+      p = { key, cwd:s.projectKey, name:s.project || '未命名', sessions:0, tokens:0, rounds:0, sources:new Set(), last:0 };
       map.set(key, p);
     }
     p.sessions++;
@@ -488,9 +494,9 @@ function projectList(){
     p.rounds += s.rounds || 0;
     if(s.source) p.sources.add(s.source);
     const t = s.endedAt || s.startedAt || 0;
-    if(t >= p.last){ p.last = t; p.latest = s; }
+    p.last = Math.max(p.last, t);
   }
-  return [...map.values()].sort((a,b)=> b.last - a.last).slice(0, PROJ_MAX);
+  return [...map.values()].sort((a,b)=> b.last - a.last);
 }
 
 function renderProjects(){
@@ -502,16 +508,16 @@ function renderProjects(){
     return;
   }
 
-  row.innerHTML = projectList().map(p=>{
+  const projects = projectList().slice(0, PROJ_MAX);
+  row.innerHTML = projects.map((p,i)=>{
     const srcs = [...p.sources];
-    const main = p.latest || {};
     return `
-    <button class="proj" data-sid="${main.id || ''}" data-src="${main.source || ''}">
+    <button class="proj" data-project="${i}">
       <div class="proj__top">
         <span class="proj__logo">
           <svg viewBox="0 0 24 24"><path d="M3.5 7.3c0-1.1.9-2 2-2h3.2l2 2.4h7.8c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z"/><path d="M3.5 11h17"/></svg>
         </span>
-        <span class="proj__name" title="${esc(p.name)}">${esc(p.name)}</span>
+        <span class="proj__name" >${esc(p.name)}</span>
       </div>
       <div class="proj__srcs">
         ${srcs.map(s=>`<span class="proj__src proj__src--${s}">${SRC_LABEL[s] || s}</span>`).join('')}
@@ -529,8 +535,7 @@ function renderProjects(){
 
   $$('.proj', row).forEach(el=>{
     el.addEventListener('click', ()=>{
-      if(!el.dataset.sid) return;
-      loadRealSession(el.dataset.sid, el.dataset.src);
+      openSessSheet(projects[Number(el.dataset.project)]);
     });
   });
 }
@@ -1078,6 +1083,122 @@ async function acknowledgeSend(){
   }catch(e){ toast(e.message); }
 }
 
+const NEW_CHAT_STORAGE = 'agent-phone.newChat.v1';
+let newChatPending = null, newChatBusy = false;
+try{ newChatPending = JSON.parse(localStorage.getItem(NEW_CHAT_STORAGE) || 'null'); }catch(e){}
+
+function showNewChat(project){
+  const select = $('#newChatProject');
+  select.replaceChildren(new Option('默认工作台项目', ''));
+  for(const p of projectList()){
+    if(p.cwd) select.add(new Option(p.name + ' · ' + p.cwd, p.cwd));
+  }
+  if(newChatPending){
+    if(![...select.options].some(o=>o.value === newChatPending.project)){
+      select.add(new Option(newChatPending.project, newChatPending.project));
+    }
+    select.value = newChatPending.project;
+    $('#newChatText').value = newChatPending.text;
+  }else{
+    select.value = project?.cwd || '';
+    $('#newChatStatus').textContent = '';
+  }
+  updateNewChat();
+  $('#newChatDialog').showModal();
+}
+
+function updateNewChat(){
+  $('#newChatProject').disabled = !!newChatPending;
+  $('#newChatText').readOnly = !!newChatPending;
+  $('#submitNewChat').disabled = newChatBusy;
+  $('#submitNewChat').textContent = newChatPending ? '查看创建结果' : '创建并发送';
+}
+
+async function openCreatedChat(job){
+  if(job.session !== job.id){
+    const data = await controlFetch('/api/messages?session='+encodeURIComponent(job.session)+'&source=codex');
+    if(!data.error){
+      const pending = newChatPending;
+      const key = sendKey('codex', job.session);
+      controlUI.pending.set(key, { ...job, text:pending.text });
+      if(job.status === 'failed') controlUI.drafts.set(key, pending.text);
+      persistSends();
+      clearNewChat();
+      $('#newChatDialog').close();
+      $('#sessMask').classList.remove('is-open');
+      await loadRealSession(job.session, 'codex');
+      loadSessions().then(renderProjects);
+      return;
+    }
+  }
+  $('#newChatStatus').textContent = job.message;
+  if(job.status === 'failed') clearNewChat(false);
+  $('#ackNewChat').hidden = job.status !== 'unknown';
+}
+
+async function acknowledgeNewChat(){
+  if(!newChatPending || newChatBusy) return;
+  newChatBusy = true;
+  try{
+    if(!controlUI.csrf) await loadControl();
+    await controlFetch('/api/jobs/acknowledge', {
+      method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
+      body:JSON.stringify({requestId:newChatPending.requestId}),
+    });
+    clearNewChat(false);
+    $('#newChatStatus').textContent = '已结束待确认请求。';
+  }catch(e){ $('#newChatStatus').textContent = e.message; }
+  finally{ newChatBusy = false; updateNewChat(); }
+}
+
+function clearNewChat(clearText = true){
+  localStorage.removeItem(NEW_CHAT_STORAGE);
+  newChatPending = null;
+  $('#ackNewChat').hidden = true;
+  if(clearText) $('#newChatText').value = '';
+}
+
+async function createChat(event){
+  event.preventDefault();
+  if(newChatBusy) return;
+  newChatBusy = true;
+  updateNewChat();
+  try{
+    if(!controlUI.csrf) await loadControl();
+    if(!controlUI.sources?.codex?.available) throw new Error('Codex 常驻服务未就绪。');
+    if(!newChatPending){
+      const text = $('#newChatText').value.trim();
+      if(!text) return;
+      const request = {requestId:newRequestId(), source:'codex', project:$('#newChatProject').value, text};
+      localStorage.setItem(NEW_CHAT_STORAGE, JSON.stringify(request));
+      newChatPending = request;
+    }
+    $('#newChatStatus').textContent = '正在确认会话…';
+    const data = await controlFetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
+      body:JSON.stringify(newChatPending),
+    });
+    await openCreatedChat(data.job);
+  }catch(e){
+    $('#newChatStatus').textContent = e.message;
+    if(e.status === 403){ controlUI.csrf = null; await loadControl(); }
+    if([400,409,501].includes(e.status)) clearNewChat(false);
+  }finally{
+    newChatBusy = false;
+    updateNewChat();
+  }
+}
+
+async function pollNewChat(){
+  if(!newChatPending || newChatBusy || !$('#newChatDialog').open) return;
+  newChatBusy = true;
+  try{
+    const d = await controlFetch('/api/jobs?id='+encodeURIComponent(newChatPending.requestId));
+    await openCreatedChat(d.job);
+  }catch(e){ /* The original request remains available for manual confirmation. */ }
+  finally{ newChatBusy = false; updateNewChat(); }
+}
+
 async function releaseSession(){
   const session = state.realSessionId;
   const key = sendKey('codex', session);
@@ -1131,28 +1252,12 @@ function refreshStats(){
   btn.classList.add('is-spinning');
   setTimeout(()=> btn.classList.remove('is-spinning'), 600);
 
-  const values = {
-    today: '395.33M', total: '28.47G', cache: '85.1%', rounds: '8732',
-  };
-  // 无网关时做本地假刷新动画
-  if(!usageReady){
-    values.today = (380 + Math.random()*30).toFixed(2)+'M';
-    values.total = (28.2 + Math.random()*0.5).toFixed(2)+'G';
-    values.cache = (83 + Math.random()*4).toFixed(1)+'%';
-    values.rounds = String(8700 + Math.floor(Math.random()*80));
-    Object.entries(values).forEach(([k,v])=>{
-      const el = $(`[data-stat="${k}"]`);
-      el.style.transition = 'opacity .18s';
-      el.style.opacity = '0';
-      setTimeout(()=>{ el.textContent = v; el.style.opacity = '1'; }, 180);
-    });
-    toast('已刷新（演示数据）');
-  }
-  syncUsage(true);
+  syncUsage(false);
 }
 
 /* ---------- 事件绑定 ---------- */
 function bind(){
+  $('#ackNewChat').addEventListener('click', acknowledgeNewChat);
   $('#btnBack').addEventListener('click', goHome);
   $('#btnHome').addEventListener('click', goHome);
   $('#btnRefresh').addEventListener('click', refreshStats);
@@ -1173,8 +1278,16 @@ function bind(){
     toast(on ? '已连接 ' + host : '未连接，点击设置');
   });
 
-  $('#sessionBar').addEventListener('click', openSessSheet);
-  $('#btnAllSessions').addEventListener('click', openSessSheet);
+  $('#sessionBar').addEventListener('click', ()=>openSessSheet());
+  $('#btnAllSessions').addEventListener('click', ()=>openSessSheet());
+  $('#btnNewChat').addEventListener('click', ()=>showNewChat());
+  $('#closeNewChat').addEventListener('click', ()=>$('#newChatDialog').close());
+  $('#newChatForm').addEventListener('submit', createChat);
+  $$('[data-heat-mode]').forEach(button=>button.addEventListener('click', ()=>{
+    heatMode = button.dataset.heatMode;
+    $$('[data-heat-mode]').forEach(b=>b.setAttribute('aria-pressed', String(b === button)));
+    buildHeatmap(heatDaily);
+  }));
   $('#sessMask').addEventListener('click', e=>{
     if(e.target.id === 'sessMask') $('#sessMask').classList.remove('is-open');
   });
@@ -1217,6 +1330,7 @@ updateSendState();
 loadControl();
 pollSendJobs();
 setInterval(pollSendJobs, 2000);
+setInterval(pollNewChat, 1500);
 setInterval(()=>{ if(!document.hidden) loadControl(); }, 15000);
 
 // 接入真实用量与会话列表，之后每 30 秒轮询

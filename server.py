@@ -27,7 +27,7 @@ import time
 import ipaddress
 import secrets
 from urllib.parse import urlsplit
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from control import ControlService, ControlError
@@ -177,8 +177,8 @@ def parse_session_file(path):
                     session["title"] = title.strip()
 
             ts = d.get("timestamp")
-            ts_ms = nn(ts) if not isinstance(ts, str) else 0
-            if ts_ms and isinstance(ts, (int, float)):
+            ts_ms = nn(ts) or _iso_ms(ts)
+            if ts_ms:
                 if session["startedAt"] is None or ts_ms < session["startedAt"]:
                     session["startedAt"] = ts_ms
                 if session["endedAt"] is None or ts_ms > session["endedAt"]:
@@ -330,6 +330,7 @@ def parse_codex_file(path, titles=None):
         s["mtime"] = 0
 
     seen = set()
+    s["daily_usage"] = []
     model = None
     try:
         fh = open(path, encoding="utf-8", errors="replace")
@@ -374,6 +375,7 @@ def parse_codex_file(path, titles=None):
                 if not norm:
                     continue
                 s["rounds"] += 1
+                s["daily_usage"].append((ts, norm["total"]))
                 for k in ("input", "cache_read", "cache_create", "output", "reasoning", "total"):
                     s[k] += norm[k]
                 mb = s["models"].setdefault(model or "codex", {"tokens": 0, "rounds": 0})
@@ -519,8 +521,8 @@ def parse_dsh_sessions():
         s["total"] = meta["uncached"] + meta["output"] + meta["cache_read"] + meta["cache_write"]
         s["rounds"] = meta["turns"]
         # 没有 sessionStats 的会话，数 assistant/message 事件
+        ev = _dsh_events(sid)
         if not s["rounds"] or not s["total"]:
-            ev = _dsh_events(sid)
             calls = sum(1 for e in ev if e.get("type") == "assistant/message")
             msgs = sum(1 for e in ev if e.get("type") in ("user/message", "assistant/message"))
             s["rounds"] = s["rounds"] or calls
@@ -537,13 +539,20 @@ def parse_dsh_sessions():
                     s["total"] += nn(u.get("totalTokens"))
         if s["total"] or s["rounds"]:
             model = "deepseek-harness"
-            for e in _dsh_events(sid):
+            for e in ev:
                 if e.get("type") == "assistant/message":
                     m = (((e.get("data") or {}).get("message") or {}).get("source") or {}).get("model")
                     if m:
                         model = m
                         break
             s["models"][model] = {"tokens": s["total"], "rounds": s["rounds"]}
+        s["daily_usage"] = []
+        for event in ev:
+            if event.get("type") != "assistant/message":
+                continue
+            u = (event.get("data") or {}).get("usage") or {}
+            amount = nn(u.get("totalTokens")) or sum(nn(u.get(k)) for k in ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"))
+            s["daily_usage"].append((nn(event.get("time")) or _iso_ms(event.get("time")), amount))
         ended = s.get("mtime")
         if ended:
             s["endedAt"] = int(ended * 1000)
@@ -859,7 +868,8 @@ def _sum(sessions):
 def compute_all():
     wb_sessions = []
     for f in iter_session_files():
-        s, _rounds = parse_session_file(f)
+        s, rounds = parse_session_file(f)
+        s["daily_usage"] = [(r["ts"], r["total"]) for r in rounds]
         s["source"] = "workbuddy"
         wb_sessions.append(s)
 
@@ -877,18 +887,20 @@ def compute_all():
     today = datetime.now().strftime("%Y-%m-%d")
     tot, rounds_total = _sum(sessions)
 
-    for s in sessions:
-        # 按天：没有时间戳的会话计入今天
-        day_ts = s.get("endedAt") or s.get("mtime") and s["mtime"] * 1000
-        day = datetime.fromtimestamp(day_ts / 1000).strftime("%Y-%m-%d") if day_ts else today
-        per_day[day] += s["total"]
+    for session in sessions:
+        remaining = session["total"]
+        fallback = session.get("endedAt") or session.get("startedAt") or (session.get("mtime") or 0) * 1000
+        for timestamp, amount in session.get("daily_usage", []):
+            if not timestamp or not remaining:
+                continue
+            amount = min(amount, remaining)
+            per_day[datetime.fromtimestamp(timestamp / 1000).strftime("%Y-%m-%d")] += amount
+            remaining -= amount
+        if remaining:
+            day = datetime.fromtimestamp(fallback / 1000).strftime("%Y-%m-%d") if fallback else today
+            per_day[day] += remaining
 
-    # 热力图窗口补齐 147 天
-    days = {}
-    d0 = datetime.now() - timedelta(days=146)
-    for i in range(147):
-        key = (d0 + timedelta(days=i)).strftime("%Y-%m-%d")
-        days[key] = per_day.get(key, 0)
+    days = dict(per_day)
 
     prompt_total = tot["input"] + tot["cache_read"] + tot["cache_create"]
     cache_hit = round(tot["cache_read"] / prompt_total * 100, 1) if prompt_total else 0.0
@@ -979,6 +991,7 @@ def compute_all():
         "title": s["title"] or "未命名会话",
         "project": s["project"] or s["source"],
         "cwd": s["cwd"],
+        "projectKey": os.path.realpath(s["cwd"]) if s["cwd"] and os.path.isabs(s["cwd"]) else None,
         "startedAt": s["startedAt"],
         "endedAt": s["endedAt"],
         "messages": s["messages"],
@@ -1014,6 +1027,16 @@ def get_sessions():
             _cache["at"] = now
             _cache2["at"] = now
         return _cache2["data"]
+
+
+def resolve_new_workspace(project):
+    if project == "":
+        return ROOT
+    if isinstance(project, str) and any(
+        session["projectKey"] == project for session in get_sessions()
+    ) and os.path.isdir(project) and os.path.realpath(project) == project:
+        return project
+    raise ControlError("invalid_project", "项目目录不可用，请刷新项目列表后重试。", 409)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1089,6 +1112,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             job = get_control_service().submit(
                 payload, lambda sid, source: find_codex_file(sid) if source == "codex" else None,
+                resolve_new_workspace,
             )
             self._json({"job": job}, 202)
         except ControlError as exc:

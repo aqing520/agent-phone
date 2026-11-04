@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <title>工作台</title>
 <link rel="manifest" href="manifest.webmanifest" />
-<link rel="stylesheet" href="styles.css?v=20261104-send1" />
+<link rel="stylesheet" href="styles.css?v=20261104-projects1" />
 </head>
 <body>
 
@@ -41,28 +41,29 @@
           <span class="card__icon card__icon--purple">
             <svg viewBox="0 0 24 24" class="ic"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
           </span>
-          <h2 class="card__title">活跃热力图</h2>
-          <svg viewBox="0 0 24 24" class="ic chev"><path d="M9 6l6 6-6 6" /></svg>
+          <h2 class="card__title">Token 活动</h2>
+          <div class="hm-modes"><button type="button" data-heat-mode="day" aria-pressed="true">每天</button><button type="button" data-heat-mode="week" aria-pressed="false">每周</button></div>
         </div>
 
-        <div class="heatmap" id="heatmap"></div>
+        <div class="hm-scroll" id="heatScroll"><div class="heatmap" id="heatmap"></div></div>
+        <p class="hm-note" id="heatNote"></p>
 
         <div class="statbar">
           <div class="stat">
             <span class="stat__label">今日消耗</span>
-            <span class="stat__value" data-stat="today">395.33M</span>
+            <span class="stat__value" data-stat="today">—</span>
           </div>
           <div class="stat">
             <span class="stat__label">累计消耗</span>
-            <span class="stat__value" data-stat="total">28.47G</span>
+            <span class="stat__value" data-stat="total">—</span>
           </div>
           <div class="stat">
             <span class="stat__label">缓存命中</span>
-            <span class="stat__value" data-stat="cache">85.1%</span>
+            <span class="stat__value" data-stat="cache">—</span>
           </div>
           <div class="stat">
             <span class="stat__label">对话轮次</span>
-            <span class="stat__value" data-stat="rounds">8732</span>
+            <span class="stat__value" data-stat="rounds">—</span>
           </div>
         </div>
       </article>
@@ -74,6 +75,7 @@
             <svg viewBox="0 0 24 24" class="ic"><path d="M3.5 7.3c0-1.1.9-2 2-2h3.2l2 2.4h7.8c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2z" /><path d="M3.5 11h17" /></svg>
           </span>
           <h2 class="section__title">最近项目</h2>
+          <button class="section__more" id="btnNewChat">＋ 新建聊天</button>
           <button class="section__more" id="btnAllSessions">全部会话
             <svg viewBox="0 0 24 24" class="ic"><path d="M9 6l6 6-6 6" /></svg>
           </button>
@@ -186,13 +188,28 @@
 <div class="sheet-mask" id="sessMask">
   <div class="sheet sheet--sess">
     <div class="sheet__grab"></div>
-    <h3 class="sheet__title">会话历史 <span class="sheet__sub" id="sessMeta"></span></h3>
+    <h3 class="sheet__title"><span id="sessTitle">会话历史</span> <span class="sheet__sub" id="sessMeta"></span></h3>
     <div class="sess-list" id="sessList"></div>
   </div>
 </div>
 
+<dialog id="newChatDialog" class="new-chat">
+  <form id="newChatForm">
+    <h3>新建 Codex 聊天</h3>
+    <label for="newChatProject">项目</label>
+    <select id="newChatProject"></select>
+    <label for="newChatText">第一条消息</label>
+    <textarea id="newChatText" rows="3" maxlength="12000" required placeholder="输入你想让 Codex 做的事"></textarea>
+    <p id="newChatStatus" role="status"></p>
+    <div class="new-chat__actions">
+      <button type="button" id="closeNewChat">关闭</button>
+      <button type="button" id="ackNewChat" hidden>结束待确认请求</button>
+      <button type="submit" id="submitNewChat">创建并发送</button>
+    </div>
+  </form>
+</dialog>
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20261104-send3"></script>
+<script src="app.js?v=20261104-projects1"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <title>工作台</title>
 <link rel="manifest" href="manifest.webmanifest" />
-<link rel="stylesheet" href="styles.css?v=20261104-acp2" />
+<link rel="stylesheet" href="styles.css?v=20261104-runtime2" />
 </head>
 <body>
 
@@ -122,6 +122,10 @@
 
     <main class="messages" id="messages"></main>
 
+    <div id="chatModelRow" class="chat-model" hidden>
+      <label for="chatModel">模型</label>
+      <select id="chatModel"></select>
+    </div>
     <div class="send-status" id="sendStatus" role="status" aria-live="polite">
       <span id="sendStatusText">正在检查发送通道…</span>
       <button type="button" id="btnCheckSend" hidden>确认发送结果</button>
@@ -175,6 +179,15 @@
       <button class="switch" data-toggle></button>
     </div>
 
+    <div class="sheet__group">手机发送</div>
+    <div class="row">
+      <div><div class="row__title">Codex</div><div class="row__desc" id="codexRuntimeStatus"></div></div>
+      <button type="button" class="switch" data-runtime="codex" role="switch" aria-label="Codex 手机发送" aria-checked="false" disabled></button>
+    </div>
+    <div class="row">
+      <div><div class="row__title">DeepSeek Harness</div><div class="row__desc" id="dshRuntimeStatus"></div></div>
+      <button type="button" class="switch" data-runtime="dsh" role="switch" aria-label="DeepSeek Harness 手机发送" aria-checked="false" disabled></button>
+    </div>
     <div class="sheet__group">
       看板展示
       <span class="sheet__group-hint">关掉的客户端不占位，随时可打开</span>
@@ -201,6 +214,10 @@
       <option value="codex">Codex</option>
       <option value="dsh">DeepSeek Harness</option>
     </select>
+    <div id="newChatModelRow" class="new-chat__model" hidden>
+      <label for="newChatModel">模型</label>
+      <select id="newChatModel"></select>
+    </div>
     <label for="newChatProject">项目</label>
     <select id="newChatProject"></select>
     <label for="newChatText">第一条消息</label>
@@ -215,6 +232,6 @@
 </dialog>
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20261104-acp2"></script>
+<script src="app.js?v=20261104-runtime2"></script>
 </body>
 </html>

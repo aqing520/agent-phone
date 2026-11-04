@@ -1110,9 +1110,16 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ("/api/send", "/api/jobs/acknowledge", "/api/sessions/release"):
+            if path not in ("/api/send", "/api/jobs/acknowledge", "/api/sessions/release", "/api/control/runtime"):
                 raise ControlError("not_found", "没有这个接口。", 404)
             payload = self._read_post()
+            if path == "/api/control/runtime":
+                if not isinstance(payload, dict):
+                    raise ControlError("invalid_request", "请求必须是 JSON 对象。")
+                service = get_control_service()
+                service.set_runtime_enabled(payload.get("source"), payload.get("enabled"))
+                self._json({"sources": service.capabilities()})
+                return
             if path == "/api/sessions/release":
                 session = payload.get("session") if isinstance(payload, dict) else None
                 source = payload.get("source", "codex") if isinstance(payload, dict) else "codex"

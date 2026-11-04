@@ -154,6 +154,7 @@ class RuntimeDaemon:
     socket_stem = "runtime"
     client_type = AppServerClient
     stderr_name = "app-server.stderr.log"
+    idle_timeout = 300
 
     def binary(self):
         return self.service.codex
@@ -172,8 +173,8 @@ class RuntimeDaemon:
     def status(self):
         with self.lock:
             client = self.client
-            return {"ready": bool(client and not client.closed.is_set()),
-                    "appServerPid": client.proc.pid if client else None,
+            return {"ready": True,
+                    "appServerPid": client.proc.pid if client and not client.closed.is_set() else None,
                     "loadedSessions": len(self.loaded)}
 
     def record(self, event, **details):
@@ -309,13 +310,11 @@ class RuntimeDaemon:
     def release(self, sid):
         with self.lock:
             client = self.client
-            if not client or client.closed.is_set():
-                return {"released": False, "error": "Codex 常驻服务暂未就绪。"}
             if sid in self.active or sid in self.releasing:
                 return {"released": False, "error": "会话正在处理，请稍后再释放。"}
             if self.has_queued_job(sid):
                 return {"released": False, "error": "会话还有待执行的消息，请等任务结束。"}
-            if sid not in self.loaded:
+            if not client or client.closed.is_set() or sid not in self.loaded:
                 return {"released": True}
             done = threading.Event()
             self.releasing[sid] = done
@@ -389,27 +388,48 @@ class RuntimeDaemon:
             socket_thread.start()
             self._recover()
             try:
-                while not self.stop_event.is_set():
-                    if not self.client or self.client.closed.is_set():
-                        self._recover()
-                        try:
-                            client = self.client_type(self.binary(), root / self.stderr_name, self.notification)
-                            with self.lock:
-                                self.client = client
-                            self.record("runtime_started", source=self.source, pid=client.proc.pid)
-                        except Exception as exc:
-                            self.record("runtime_start_failed", source=self.source, error=str(exc)[:2000])
-                            self.stop_event.wait(3)
-                            continue
-                    self.dispatch()
-                    self.wake.wait(.3)
-                    self.wake.clear()
+                self.serve_jobs(root)
             finally:
                 self._recover()
                 self.server.shutdown()
                 self.server.server_close()
                 socket_thread.join(timeout=2)
                 path.unlink(missing_ok=True)
+
+    def serve_jobs(self, root):
+        last_busy = time.monotonic()
+        while not self.stop_event.is_set():
+            if self.client and self.client.closed.is_set():
+                self._recover()
+            with self.service.db() as conn:
+                queued = conn.execute(
+                    "SELECT 1 FROM jobs WHERE source=? AND status='queued' LIMIT 1",
+                    (self.source,),
+                ).fetchone()
+                enabled = self.service.runtime_enabled(conn, self.source)
+            with self.lock:
+                busy = bool(queued or self.active or self.releasing)
+            if busy:
+                last_busy = time.monotonic()
+            if queued and not self.client:
+                try:
+                    client = self.client_type(self.binary(), root / self.stderr_name, self.notification)
+                    with self.lock:
+                        self.client = client
+                    self.record("runtime_started", source=self.source, pid=client.proc.pid)
+                except Exception as exc:
+                    self.record("runtime_start_failed", source=self.source, error=str(exc)[:2000])
+                    with self.service.db() as conn:
+                        conn.execute(
+                            "UPDATE jobs SET status='failed',message=?,updated_at=? WHERE source=? AND status='queued'",
+                            (f"{self.runtime_name} 启动失败，请在 Mac 检查客户端。", int(time.time()*1000), self.source),
+                        )
+            if queued and self.client:
+                self.dispatch()
+            elif self.client and not busy and (not enabled or time.monotonic() - last_busy >= self.idle_timeout):
+                self._recover()
+            self.wake.wait(.3 if self.client else 1)
+            self.wake.clear()
 
     def stop(self):
         self.stop_event.set()

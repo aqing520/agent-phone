@@ -15,6 +15,11 @@ ACTIVE = ("queued", "starting", "running")
 MAX_MESSAGE = 12000
 DATA_DIR = Path.home() / ".config" / "agent-phone" / "control"
 BUNDLED_DSH = Path("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
+DSH_MODELS = {
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-flash": "DeepSeek V4.1 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+}
 RUNTIME_SOCKETS = {"codex": "runtime.sock", "dsh": "dsh-runtime.sock"}
 
 
@@ -76,6 +81,9 @@ class ControlService:
                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pid INTEGER, turn_id TEXT
             )""")
             columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+            conn.execute("CREATE TABLE IF NOT EXISTS runtime_settings (source TEXT PRIMARY KEY, enabled INTEGER NOT NULL)")
+            if "model" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN model TEXT")
             if "turn_id" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN turn_id TEXT")
         self.db_path.chmod(0o600)
@@ -122,26 +130,46 @@ class ControlService:
             raise ControlError("release_pending", result.get("error", "暂未确认会话已释放，请稍后重试。"), 409)
         return result
 
+    @staticmethod
+    def runtime_enabled(conn, source):
+        row = conn.execute("SELECT enabled FROM runtime_settings WHERE source=?", (source,)).fetchone()
+        return row is None or bool(row["enabled"])
+
+    def set_runtime_enabled(self, source, enabled):
+        if not self.enabled:
+            raise ControlError("unsupported_source", "当前网关未启用会话控制。", 403)
+        if not isinstance(source, str) or source not in RUNTIME_SOCKETS or type(enabled) is not bool:
+            raise ControlError("invalid_request", "客户端或开关状态无效。")
+        with self.db() as conn:
+            conn.execute("INSERT OR REPLACE INTO runtime_settings VALUES (?, ?)", (source, enabled))
+        self.runtime_call("wake", source=source)
+
     def capabilities(self):
-        runtime = self.runtime_call() if self.enabled and self.codex else {"ready": False}
-        ready = bool(runtime.get("ready"))
-        dsh_ready = self.enabled and bool(self.dsh and self.runtime_call(source="dsh").get("ready"))
-        dsh_reason = ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
-                      "Mac 未找到 DeepSeek Harness CLI。" if not self.dsh else
-                      "DeepSeek Harness 常驻服务尚未就绪。" if not dsh_ready else
-                      "DeepSeek Harness 已连接，可连续发送消息。")
-        reason = ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
-                  "Mac 未找到 Codex CLI。" if not self.codex else
-                  "Codex 常驻服务尚未就绪，正在等待连接。" if not ready else
-                  "Codex 常驻会话已连接，可连续发送消息。")
-        return {
-            "codex": {"available": bool(self.codex) and self.enabled and ready,
-                      "mode": "app-server", "reason": reason, "release": ready,
-                      "note": "同一会话一次执行一条消息；需要额外权限时请回 Mac 处理。",
-                      "runtime": {k: runtime.get(k) for k in ("ready", "appServerPid", "loadedSessions")}},
-            "workbuddy": {"available": False, "reason": "WorkBuddy 发送入口尚未接通。"},
-            "dsh": {"available": dsh_ready, "mode": "acp", "reason": dsh_reason, "release": dsh_ready},
-        }
+        sources = {"workbuddy": {"available": False, "reason": "WorkBuddy 发送入口尚未接通。"}}
+        with self.db() as conn:
+            for source, name, binary, mode in (
+                ("codex", "Codex", self.codex, "app-server"),
+                ("dsh", "DeepSeek Harness", self.dsh, "acp"),
+            ):
+                enabled = self.runtime_enabled(conn, source)
+                runtime = self.runtime_call(source=source) if self.enabled and binary else {}
+                connected = bool(runtime.get("ready") and runtime.get("appServerPid"))
+                available = bool(runtime.get("ready") and enabled)
+                reason = (
+                    "发送仅在私人部署中开启。" if not self.enabled else
+                    f"Mac 未找到 {name} CLI。" if not binary else
+                    "已关闭手机发送。" if not enabled else
+                    f"{name} 控制服务尚未就绪。" if not available else
+                    "已连接，可连续发送。" if connected else
+                    "待机，发送时自动连接。"
+                )
+                sources[source] = {
+                    "available": available, "enabled": enabled, "connected": connected,
+                    "toggle": bool(self.enabled and binary), "mode": mode, "reason": reason,
+                    "release": connected, "runtime": runtime,
+                }
+        sources["dsh"]["models"] = DSH_MODELS
+        return sources
 
     @staticmethod
     def public(row):
@@ -207,10 +235,15 @@ class ControlService:
             raise ControlError("unsupported_source", "请选择已接入的客户端。")
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE:
             raise ControlError("invalid_text", f"消息不能为空，且最多 {MAX_MESSAGE} 字。")
+        model = payload.get("model")
+        if model is not None and (source != "dsh" or not isinstance(model, str) or model not in DSH_MODELS):
+            raise ControlError("invalid_model", "所选模型不可用。")
         text = text.strip()
         identity = [source, sid, text]
         if new_chat:
             identity.append(payload["project"])
+        if model is not None:
+            identity.append({"model": model})
         fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
         with self.db() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -219,6 +252,8 @@ class ControlService:
                     raise ControlError("request_conflict", "同一请求标识不能用于不同消息。", 409)
                 return self.get(job_id)
         capability = self.capabilities().get(source)
+        if capability and capability.get("enabled") is False and self.enabled:
+            raise ControlError("runtime_disabled", "请先在设置中开启此客户端的手机发送。", 409)
         if not capability or not capability["available"]:
             code = "runtime_unavailable" if self.enabled and {"codex": self.codex, "dsh": self.dsh}.get(source) else "unsupported_source"
             raise ControlError(code, (capability or {}).get("reason", "此客户端尚未接通发送。"), 503 if code == "runtime_unavailable" else 501)
@@ -246,12 +281,14 @@ class ControlService:
                 if old["fingerprint"] != fingerprint:
                     raise ControlError("request_conflict", "同一请求标识不能用于不同消息。", 409)
                 return self.public(old)
+            if not self.runtime_enabled(conn, source):
+                raise ControlError("runtime_disabled", "请先在设置中开启此客户端的手机发送。", 409)
             active = conn.execute("SELECT id FROM jobs WHERE source=? AND session=? AND status IN ('queued','starting','running','unknown')",
                                   (source, sid)).fetchone()
             if active:
                 raise ControlError("session_busy", "这段会话已有发送任务，或上次结果待确认，请先查看发送状态。", 409)
-            conn.execute("INSERT INTO jobs (id,source,session,fingerprint,text,cwd,rollout,status,message,created_at,updated_at,pid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None))
+            conn.execute("INSERT INTO jobs (id,source,session,fingerprint,text,cwd,rollout,status,message,created_at,updated_at,pid,model) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None, model))
         # Wake is only a hint. The runtime also polls durable queued jobs, so losing
         # this IPC response never means the user message should be submitted again.
         self.runtime_call("wake", source=source)

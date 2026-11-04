@@ -734,3 +734,8 @@ button.section__more{
   padding: 5px 8px; text-align: left; vertical-align: top;
 }
 .md-table th{ background: #F7F6FB; font-weight: 700; color: var(--ink); white-space: nowrap; }
+
+
+.chat-model{ padding:6px 16px; font-size:12px; color:var(--ink-3); }
+.chat-model select{ margin-left:6px; max-width:80%; border:1px solid #d7ddeb; border-radius:8px; padding:4px 8px; background:white; color:var(--ink); font:inherit; }
+.new-chat__model label{ display:block; margin-bottom:6px; }

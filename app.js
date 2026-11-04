@@ -965,6 +965,48 @@ async function controlFetch(url, options={}){
   }finally{ clearTimeout(timer); }
 }
 
+function renderRuntimeSettings(){
+  for(const button of $$('[data-runtime]')){
+    const source = button.dataset.runtime;
+    const capability = controlUI.sources?.[source];
+    button.disabled = !controlUI.csrf || !capability?.toggle || button.dataset.busy === '1';
+    button.classList.toggle('is-on', !!capability?.enabled);
+    button.setAttribute('aria-checked', String(!!capability?.enabled));
+    $(`#${source}RuntimeStatus`).textContent = capability?.reason || '正在检查连接…';
+  }
+}
+
+async function toggleRuntime(button){
+  const source = button.dataset.runtime;
+  const enabled = !controlUI.sources[source].enabled;
+  button.dataset.busy = '1';
+  renderRuntimeSettings();
+  try{
+    const d = await controlFetch('/api/control/runtime', {
+      method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
+      body:JSON.stringify({source, enabled}),
+    });
+    controlUI.sources = d.sources;
+    if(!enabled) toast('已关闭手机发送，当前任务结束后断开。');
+  }catch(e){ toast(e.message); }
+  finally{
+    delete button.dataset.busy;
+    await loadControl();
+  }
+}
+
+function renderDshModels(select, label, selected){
+  const value = selected ?? select.value;
+  const models = controlUI.sources?.dsh?.models || {};
+  const signature = JSON.stringify(models);
+  if(select.dataset.models !== signature){
+    select.replaceChildren(new Option(label, ''));
+    for(const [id, name] of Object.entries(models)) select.add(new Option(name, id));
+    select.dataset.models = signature;
+  }
+  select.value = Object.hasOwn(models, value) ? value : '';
+}
+
 async function loadControl(){
   try{
     const d = await controlFetch('/api/control');
@@ -974,6 +1016,7 @@ async function loadControl(){
     controlUI.csrf = null;
   }
   updateSendState();
+  renderRuntimeSettings();
   if($('#newChatDialog').open) updateNewChat();
 }
 
@@ -993,7 +1036,10 @@ function applySendJob(p, job){
   }
   persistSends();
   updateSendState();
-  if(job.status === 'completed' && controlUI.selected === key) pollSession();
+  if(job.status === 'completed' && controlUI.selected === key){
+    pollSession();
+    loadControl();
+  }
 }
 
 async function submitPending(p){
@@ -1007,7 +1053,7 @@ async function submitPending(p){
     if(!controlUI.csrf) throw new Error('网关未连接');
     const d = await controlFetch('/api/send', {
       method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
-      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text }),
+      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, model:p.model || undefined }),
     });
     // Only clear the exact submitted draft, never text typed while waiting or another chat.
     if(controlUI.selected === key && $('#input').value.trim() === p.text){
@@ -1046,6 +1092,7 @@ async function send(){
   if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
   if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
   const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
+    model:a.source === 'dsh' ? $('#chatModel').value || undefined : undefined,
     status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
   controlUI.pending.set(key, p);
   if(!persistSends()){
@@ -1090,6 +1137,7 @@ try{ newChatPending = JSON.parse(localStorage.getItem(NEW_CHAT_STORAGE) || 'null
 
 function showNewChat(project){
   $('#newChatSource').value = newChatPending?.source || 'codex';
+  $('#newChatModel').value = '';
   const select = $('#newChatProject');
   select.replaceChildren(new Option('默认工作台项目', ''));
   for(const p of projectList()){
@@ -1120,6 +1168,9 @@ function updateNewChat(){
     if(available) source.value = available.value;
   }
   source.disabled = !!newChatPending;
+  $('#newChatModelRow').hidden = source.value !== 'dsh';
+  renderDshModels($('#newChatModel'), 'Harness 默认模型', newChatPending?.model);
+  $('#newChatModel').disabled = !!newChatPending;
   $('#newChatProject').disabled = !!newChatPending;
   $('#newChatText').readOnly = !!newChatPending;
   $('#submitNewChat').disabled = newChatBusy || (!newChatPending && !controlUI.sources?.[$('#newChatSource').value]?.available);
@@ -1182,7 +1233,8 @@ async function createChat(event){
     if(!newChatPending){
       const text = $('#newChatText').value.trim();
       if(!text) return;
-      const request = {requestId:newRequestId(), source, project:$('#newChatProject').value, text};
+      const request = {requestId:newRequestId(), source, project:$('#newChatProject').value, text,
+        model:source === 'dsh' ? $('#newChatModel').value || undefined : undefined};
       localStorage.setItem(NEW_CHAT_STORAGE, JSON.stringify(request));
       newChatPending = request;
     }
@@ -1242,6 +1294,13 @@ function updateSendState(){
   const busy = controlUI.submitting.has(key) || SEND_ACTIVE.has(p?.status);
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
   const ready = available && !busy && input.value.trim().length > 0;
+  const model = $('#chatModel');
+  $('#chatModelRow').hidden = !selected || a.source !== 'dsh';
+  if(selected && a.source === 'dsh'){
+    renderDshModels(model, '沿用会话模型', model.dataset.session === key ? undefined : '');
+    model.dataset.session = key;
+    model.disabled = !available || busy;
+  }
   btn.disabled = !ready;
   btn.classList.toggle('is-ready', !!ready);
   input.disabled = !available;
@@ -1276,6 +1335,7 @@ function bind(){
   $('#btnHome').addEventListener('click', goHome);
   $('#btnRefresh').addEventListener('click', refreshStats);
 
+  $$('[data-runtime]').forEach(button=>button.addEventListener('click', ()=>toggleRuntime(button)));
   $('#btnSettings').addEventListener('click', ()=> $('#sheetMask').classList.add('is-open'));
   $('#sheetDone').addEventListener('click', ()=> $('#sheetMask').classList.remove('is-open'));
   $('#sheetMask').addEventListener('click', e=>{

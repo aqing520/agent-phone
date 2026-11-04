@@ -1,5 +1,6 @@
 """Manage a local DeepSeek Harness ACP process for durable phone turns."""
 import argparse
+import json
 import signal
 import time
 from uuid import UUID
@@ -32,6 +33,39 @@ class DeepSeekRuntime(RuntimeDaemon):
     socket_stem = "dsh-runtime"
     client_type = AcpClient
     stderr_name = "dsh-acp.stderr.log"
+
+    def __init__(self, service):
+        super().__init__(service)
+        self.model_options = {}
+
+    def _recover(self):
+        super()._recover()
+        self.model_options.clear()
+
+    def select_model(self, client, sid, model):
+        config = self.model_options.get(sid) or {}
+        current = config.get("currentValue")
+        provider = json.loads(current)[0] if current else None
+        selected = next(
+            (choice["value"] for item in config.get("options", [])
+             for choice in item.get("options", [item])
+             if json.loads(choice["value"])[1] == model
+             and (not provider or json.loads(choice["value"])[0] == provider)),
+            None,
+        )
+        if not selected:
+            raise RpcError("requested model unavailable")
+        if selected != current:
+            result = client.request("session/set_config_option", {
+                "sessionId": sid, "configId": config["id"], "value": selected,
+            })
+            self.remember_options(sid, result)
+
+    def remember_options(self, sid, result):
+        self.model_options[sid] = next(
+            (config for config in result.get("configOptions", []) if config.get("category") == "model"),
+            None,
+        )
 
     def binary(self):
         return self.service.dsh
@@ -71,12 +105,16 @@ class DeepSeekRuntime(RuntimeDaemon):
                     self.active[new_sid] = self.active.pop(sid)
                     sid = new_sid
             elif not loaded:
-                client.request("session/resume", {**params, "sessionId": sid})
+                result = client.request("session/resume", {**params, "sessionId": sid})
+            if not loaded:
+                self.remember_options(sid, result)
             with self.lock:
                 if self.client is not client or client.closed.is_set():
                     raise ConnectionError("Runtime changed")
                 self.loaded.add(sid)
                 self.service.update(row["id"], "running", "DeepSeek 正在执行，回复会显示在会话中。")
+            if row["model"]:
+                self.select_model(client, sid, row["model"])
             after_seq = max((event.get("seq", 0) for event in _dsh_events(sid)), default=0)
             prompting = True
             result = client.request("session/prompt", {
@@ -99,6 +137,8 @@ class DeepSeekRuntime(RuntimeDaemon):
             status = "failed"
             if not prompting and ("active write handle" in detail or "already active" in detail):
                 message = "其他 DeepSeek 进程仍持有这段会话，请释放后重试。"
+            elif "requested model unavailable" in detail:
+                message = "当前 DeepSeek 账号未提供所选模型，请切换模型后重试。"
             elif not prompting:
                 message = "无法打开 DeepSeek 会话，请检查项目目录和会话状态。"
             else:
@@ -121,17 +161,16 @@ class DeepSeekRuntime(RuntimeDaemon):
     def release(self, sid):
         with self.lock:
             client = self.client
-            if not client or client.closed.is_set():
-                return {"released": False, "error": "DeepSeek 常驻服务暂未就绪。"}
             if sid in self.active or sid in self.releasing or self.has_queued_job(sid):
                 return {"released": False, "error": "会话正在处理，请稍后再释放。"}
-            if sid not in self.loaded:
+            if not client or client.closed.is_set() or sid not in self.loaded:
                 return {"released": True}
             self.releasing[sid] = True
         try:
             client.request("session/close", {"sessionId": sid}, timeout=10)
             with self.lock:
                 self.loaded.discard(sid)
+                self.model_options.pop(sid, None)
             return {"released": True}
         except RpcError:
             return {"released": False, "error": "DeepSeek 未确认释放会话，请稍后重试。"}

@@ -16,7 +16,7 @@ python3 server.py
 
 ## 网络方案：WireGuard + SSH 反向隧道
 
-截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 和 DeepSeek Harness 通过各自的 Mac 常驻进程执行手机发来的消息。
+截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 和 DeepSeek Harness 通过 Mac 上按需启动的运行时执行手机发来的消息。
 
 ```text
 手机浏览器：http://10.77.73.1:5173
@@ -39,7 +39,7 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 | 云服务器 | `wg-quick@apwg0` | 提供私人网络连接，使用 UDP 51820 |
 | 云服务器 | `sshd` | 接收 Mac 的连接，只在私人地址转发看板请求 |
 | Mac | `server.py` | 提供网页及接口，按请求读取本地日志 |
-| Mac | `codex_runtime.py` + `codex app-server` | 管理常驻 Codex 进程，复用会话处理连续消息 |
+| Mac | `codex_runtime.py` + `codex app-server` | 按需启动 Codex 进程，复用会话处理连续消息 |
 | Mac | SSH 客户端 | 保持反向隧道，断线后由 `launchd` 重新启动 |
 
 ### 部署与使用
@@ -69,9 +69,13 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 
 WorkBuddy 发送、交互式权限审批和完成通知尚未实现。
 
+## 手机发送开关
+
+设置里的 Codex 和 DeepSeek Harness 开关分别控制手机发送。开启后，第一次发送才会启动对应的子进程，空闲五分钟后自动退出并释放会话。关闭后停止接收新任务，已受理的任务处理完成后断开。开关保存在 Mac 上，会话历史和用量仍可查看。
+
 ## 发送消息：Codex 常驻会话
 
-手机开启 WireGuard 后，刷新页面，选择 Codex 的一段会话，在输入框输入消息并发送。回复由现有会话轮询显示。Mac 上的官方 `codex app-server` 持续运行，同一会话后续消息复用已恢复的会话，不再逐条启动 `codex exec resume`。
+手机开启 WireGuard 后，刷新页面，选择 Codex 的一段会话，在输入框输入消息并发送。回复由现有会话轮询显示。Mac 上的官方 `codex app-server` 按需启动，在空闲退出前复用已恢复的会话，不再逐条启动 `codex exec resume`。
 
 ```text
 浏览器 POST /api/send（请求编号 + 会话 + 消息）
@@ -125,6 +129,7 @@ node --check app.js
 
 手机在「新建聊天」里选择 DeepSeek Harness，或从会话历史打开已有对话。Mac 服务通过官方 `dsh acp` 发送消息，页面从本机会话日志读取回复。
 
+- 新建聊天和已有会话都能选 DeepSeek 模型。未指定时使用 Harness 默认或会话已保存的模型。可用性以当前会话的 DeepSeek 账号为准。
 - 已有会话沿用原工作目录。其他进程持有会话时，手机会提示占用。发送完成后可点「释放会话」，让其他进程接手。
 - 手机端会取消 ACP 权限请求。连接中断或缺少轮次结束记录时，页面会显示「结果待确认」。
 - 安装脚本会查找 PATH 中的 `dsh` 或官方桌面包内的 CLI。已有私人网络部署可重新运行安装脚本加入 DeepSeek 服务。

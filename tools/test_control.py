@@ -78,6 +78,8 @@ for line in sys.stdin:
         self.tmp.cleanup()
 
     def methods(self, name):
+        if not self.calls.exists():
+            return []
         return [r for r in map(json.loads,self.calls.read_text().splitlines()) if r['method']==name]
 
     def write_rollout(self, busy=False):
@@ -154,6 +156,34 @@ for line in sys.stdin:
         with self.assertRaises(ControlError) as error:self.submit(self.payload())
         self.assertEqual(error.exception.code,'session_busy')
         self.finish(job)
+
+    def test_disabled_runtime_drains_then_stays_off_until_next_send(self):
+        self.assertIsNone(self.service.runtime_call()["appServerPid"])
+        job = self.submit(self.payload("SLOW"))
+        self.service.set_runtime_enabled("codex", False)
+        with self.assertRaises(ControlError) as error:
+            self.submit(self.payload())
+        self.assertEqual(error.exception.code, "runtime_disabled")
+        self.assertEqual(self.finish(job)["status"], "completed")
+        deadline = time.monotonic() + 5
+        while self.service.runtime_call()["appServerPid"] is not None:
+            if time.monotonic() >= deadline:
+                self.fail("disabled runtime did not stop")
+            time.sleep(.05)
+        self.service.set_runtime_enabled("codex", True)
+        self.assertIsNone(self.service.runtime_call()["appServerPid"])
+        self.assertEqual(self.finish(self.submit(self.payload()))["status"], "completed")
+
+    def test_idle_runtime_stops_and_wakes_for_another_turn(self):
+        self.runtime.idle_timeout = .25
+        self.assertEqual(self.finish(self.submit(self.payload()))["status"], "completed")
+        deadline = time.monotonic() + 5
+        while self.service.runtime_call()["appServerPid"] is not None:
+            if time.monotonic() >= deadline:
+                self.fail("idle runtime did not stop")
+            time.sleep(.05)
+        self.assertEqual(self.finish(self.submit(self.payload()))["status"], "completed")
+        self.assertEqual(len(self.methods("initialize")), 2)
 
     def test_multiple_turns_reuse_process_and_loaded_session(self):
         first=self.finish(self.submit(self.payload('first')))

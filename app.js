@@ -1078,6 +1078,26 @@ async function acknowledgeSend(){
   }catch(e){ toast(e.message); }
 }
 
+async function releaseSession(){
+  const session = state.realSessionId;
+  const key = sendKey('codex', session);
+  if(state.realSessionSource !== 'codex' || !session || controlUI.submitting.has(key)) return;
+  controlUI.submitting.add(key);
+  updateSendState();
+  try{
+    await controlFetch('/api/sessions/release', {
+      method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
+      body:JSON.stringify({session}),
+    });
+    toast('手机端已释放会话，请在 Mac 桌面点重试。');
+  }catch(e){
+    toast(e.message);
+  }finally{
+    controlUI.submitting.delete(key);
+    updateSendState();
+  }
+}
+
 function updateSendState(){
   const a = agents[current], input = $('#input'), btn = $('#btnSend');
   const selected = a?.source && state.realSessionId && state.realSessionSource === a.source;
@@ -1101,6 +1121,8 @@ function updateSendState(){
   $('#sendStatus').classList.toggle('is-error', (!controlUI.submitting.has(key) && ['failed','unknown','unconfirmed'].includes(p?.status)) || controlUI.errors.has(key));
   $('#btnCheckSend').hidden = p?.status !== 'unconfirmed' || controlUI.submitting.has(key);
   $('#btnAcknowledgeSend').hidden = p?.status !== 'unknown';
+  $('#btnReleaseSession').hidden = !(available && a.source === 'codex');
+  $('#btnReleaseSession').disabled = busy;
 }
 
 /* ---------- 统计刷新 ---------- */
@@ -1168,6 +1190,7 @@ function bind(){
     if(p?.status === 'unconfirmed') submitPending(p);
   });
   $('#btnAcknowledgeSend').addEventListener('click', acknowledgeSend);
+  $('#btnReleaseSession').addEventListener('click', releaseSession);
 
 // 浏览器返回键
   window.addEventListener('popstate', ()=>{

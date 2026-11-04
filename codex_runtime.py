@@ -33,7 +33,7 @@ class AppServerClient:
         self.log = os.fdopen(fd, "w")
         try:
             self.proc = subprocess.Popen(
-                [binary, "app-server", "--stdio"], stdin=subprocess.PIPE,
+                [binary, "app-server", "--stdio", "-c", "thread_unload_delay_secs=0"], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=self.log, text=True,
                 encoding="utf-8", errors="replace", bufsize=1,
             )
@@ -146,6 +146,7 @@ class RuntimeDaemon:
         self.lock = threading.RLock()
         self.active = {}
         self.loaded = set()
+        self.releasing = {}
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.server = None
@@ -172,6 +173,9 @@ class RuntimeDaemon:
             unloaded = method in ("thread/closed", "thread/archived") or (method == "thread/status/changed" and params.get("status", {}).get("type") == "notLoaded")
             if unloaded:
                 self.loaded.discard(sid)
+                release = self.releasing.get(sid)
+                if release:
+                    release.set()
             entry = self.active.get(sid)
             if not entry:
                 return
@@ -256,7 +260,7 @@ class RuntimeDaemon:
                 client = self.client
                 if not client or client.closed.is_set() or len(self.active) >= 4:
                     return
-                if row["session"] in self.active:
+                if row["session"] in self.active or row["session"] in self.releasing:
                     continue
                 with self.service.db() as conn:
                     result = conn.execute("UPDATE jobs SET status='starting',message=?,pid=?,updated_at=? WHERE id=? AND status='queued'",
@@ -265,6 +269,39 @@ class RuntimeDaemon:
                     continue
                 self.active[row["session"]] = {"job": row["id"], "turn": None}
                 threading.Thread(target=self._start_job, args=(row, client), daemon=True).start()
+
+    def release(self, sid):
+        with self.lock:
+            client = self.client
+            if not client or client.closed.is_set():
+                return {"released": False, "error": "Codex 常驻服务暂未就绪。"}
+            if sid in self.active or sid in self.releasing:
+                return {"released": False, "error": "会话正在处理，请稍后再释放。"}
+            with self.service.db() as conn:
+                queued = conn.execute(
+                    "SELECT 1 FROM jobs WHERE source='codex' AND session=? AND status='queued'",
+                    (sid,),
+                ).fetchone()
+            if queued:
+                return {"released": False, "error": "会话还有待执行的消息，请等任务结束。"}
+            if sid not in self.loaded:
+                return {"released": True}
+            done = threading.Event()
+            self.releasing[sid] = done
+        try:
+            result = client.request("thread/unsubscribe", {"threadId": sid}, timeout=4)
+            if result.get("status") == "notLoaded":
+                with self.lock:
+                    self.loaded.discard(sid)
+                return {"released": True}
+            if done.wait(8):
+                return {"released": True}
+        except (RpcError, OSError, TimeoutError):
+            pass
+        finally:
+            with self.lock:
+                self.releasing.pop(sid, None)
+        return {"released": False, "error": "暂未确认会话已释放，请稍后重试。"}
 
     def _recover(self):
         with self.lock:
@@ -294,11 +331,13 @@ class RuntimeDaemon:
                         request = json.loads(self.rfile.readline(4096))
                         if not isinstance(request, dict):
                             return
-                        if request.get("method") not in ("status", "wake"):
+                        if request.get("method") not in ("status", "wake", "release"):
                             return
                         if request["method"] == "wake":
                             owner.wake.set()
-                        self.wfile.write((json.dumps(owner.status()) + "\n").encode())
+                        result = (owner.release(request["session"])
+                                  if request["method"] == "release" else owner.status())
+                        self.wfile.write((json.dumps(result) + "\n").encode())
                     except (OSError, ValueError):
                         pass
 

@@ -86,12 +86,12 @@ class ControlService:
         finally:
             conn.close()
 
-    def runtime_call(self, method="status"):
+    def runtime_call(self, method="status", **params):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(2)
+                sock.settimeout(14 if method == "release" else 2)
                 sock.connect(str(self.db_path.parent / "runtime.sock"))
-                sock.sendall((json.dumps({"method": method}) + "\n").encode())
+                sock.sendall((json.dumps({"method": method, **params}) + "\n").encode())
                 data = b""
                 while b"\n" not in data and len(data) < 65536:
                     part = sock.recv(4096)
@@ -102,6 +102,19 @@ class ControlService:
                 return result if isinstance(result, dict) else {"ready": False}
         except (OSError, ValueError):
             return {"ready": False}
+
+    def release(self, session):
+        if not self.enabled:
+            raise ControlError("unsupported_source", "当前网关未启用会话控制。", 403)
+        try:
+            if not isinstance(session, str) or str(uuid.UUID(session)) != session:
+                raise ValueError()
+        except ValueError:
+            raise ControlError("invalid_id", "会话标识无效。")
+        result = self.runtime_call("release", session=session)
+        if not result.get("released"):
+            raise ControlError("release_pending", result.get("error", "暂未确认会话已释放，请稍后重试。"), 409)
+        return result
 
     def capabilities(self):
         runtime = self.runtime_call() if self.enabled and self.codex else {"ready": False}

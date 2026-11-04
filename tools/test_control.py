@@ -43,6 +43,9 @@ for line in sys.stdin:
   send({'method':'turn/completed','params':{'threadId':permission_sid,'turn':{'id':permission_tid,'status':'completed'}}});continue
  if m=='initialize':send({'id':i,'result':{}})
  elif m=='thread/resume':send({'id':i,'result':{'thread':{'id':p['threadId']}}})
+ elif m=='thread/unsubscribe':
+  send({'id':i,'result':{'status':'unsubscribed'}})
+  send({'method':'thread/closed','params':{'threadId':p['threadId']}})
  elif m=='turn/start':
   text=p['input'][0]['text'];sid=p['threadId'];tid=str(uuid.uuid4())
   if text=='LOCK':send({'id':i,'error':{'message':'thread-store conflict: already has an active writer'}});continue
@@ -145,6 +148,16 @@ for line in sys.stdin:
         self.assertEqual(len(self.methods('initialize')),1)
         self.assertEqual(len(self.methods('thread/resume')),1)
         self.assertEqual(len(self.methods('turn/start')),2)
+
+    def test_release_rejects_active_turn_and_unloads_idle_session(self):
+        job = self.submit(self.payload('SLOW'))
+        with self.assertRaises(ControlError):
+            self.service.release(self.sid)
+        self.finish(job)
+        pid = self.service.runtime_call()['appServerPid']
+        self.assertTrue(self.service.release(self.sid)['released'])
+        self.assertEqual(self.service.runtime_call()['loadedSessions'], 0)
+        self.assertEqual(self.service.runtime_call()['appServerPid'], pid)
 
     def test_distinct_sessions_are_multiplexed_without_mixing_results(self):
         first = self.submit(self.payload('SLOW'))

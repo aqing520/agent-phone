@@ -1075,9 +1075,13 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ("/api/send", "/api/jobs/acknowledge"):
+            if path not in ("/api/send", "/api/jobs/acknowledge", "/api/sessions/release"):
                 raise ControlError("not_found", "没有这个接口。", 404)
             payload = self._read_post()
+            if path == "/api/sessions/release":
+                session = payload.get("session") if isinstance(payload, dict) else None
+                self._json(get_control_service().release(session))
+                return
             if path == "/api/jobs/acknowledge":
                 if not isinstance(payload, dict) or not isinstance(payload.get("requestId"), str):
                     raise ControlError("invalid_id", "发送记录标识无效。")

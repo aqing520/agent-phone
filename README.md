@@ -16,7 +16,7 @@ python3 server.py
 
 ## 网络方案：WireGuard + SSH 反向隧道
 
-截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex CLI 消息发送也已接通，见下文。
+截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 消息发送使用官方 app-server 常驻模式，见下文。
 
 ```text
 手机浏览器：http://10.77.73.1:5173
@@ -39,12 +39,13 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 | 云服务器 | `wg-quick@apwg0` | 提供私人网络连接，使用 UDP 51820 |
 | 云服务器 | `sshd` | 接收 Mac 的连接，只在私人地址转发看板请求 |
 | Mac | `server.py` | 提供网页及接口，按请求读取本地日志 |
+| Mac | `codex_runtime.py` + `codex app-server` | 管理常驻 Codex 进程，复用会话处理连续消息 |
 | Mac | SSH 客户端 | 保持反向隧道，断线后由 `launchd` 重新启动 |
 
 ### 部署与使用
 
 - 服务器安装脚本：`tools/setup_private_relay.sh`；云安全组放行入站 UDP 51820，SSH 需可达。不开放公网 TCP 5173。
-- Mac 安装脚本：`tools/install_mac_relay.py`；安装 `local.agent-phone.gateway` 和 `local.agent-phone.tunnel` 两个 LaunchAgent，用户登录后启动，进程退出后重新启动。
+- Mac 安装脚本：`tools/install_mac_relay.py`；安装 `local.agent-phone.codex`、`local.agent-phone.gateway` 和 `local.agent-phone.tunnel` 三个 LaunchAgent，用户登录后启动，进程退出后重新启动。
 - 手机导入独立 WireGuard 配置，开启连接后打开 `http://10.77.73.1:5173`。不修改手机 DNS，也不接管其他上网流量。
 - 私钥、手机配置、二维码保存在仓库之外，不提交到 GitHub。换服务器需要迁移隧道，并更新手机配对配置。
 
@@ -64,39 +65,45 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 - 最近项目、历史会话与 Markdown 正文展示。
 - 用量每 30 秒刷新，当前会话每 4 秒轮询。
 - 移动端布局及主屏幕图标配置。
-- Codex CLI 会话发送、后台执行状态、重复提交保护和失败提示。
+- Codex 常驻会话连续发送、后台执行状态、重复提交保护和失败提示。
 
 WorkBuddy / DeepSeek Harness 的发送、交互式权限审批和完成通知尚未实现。断连时部分用量界面仍会显示演示数据。
 
-## 发送消息：Codex CLI 续接
+## 发送消息：Codex 常驻会话
 
-首版发送已接通。手机开启 WireGuard 后，刷新页面，选择 Codex 的一段会话，在输入框输入消息并发送。页面显示启动、执行、完成或失败状态，回复由现有会话轮询显示。
+手机开启 WireGuard 后，刷新页面，选择 Codex 的一段会话，在输入框输入消息并发送。回复由现有会话轮询显示。Mac 上的官方 `codex app-server` 持续运行，同一会话后续消息复用已恢复的会话，不再逐条启动 `codex exec resume`。
 
 ```text
 浏览器 POST /api/send（请求编号 + 会话 + 消息）
   → 私人网络 → Mac 网关校验并保存任务
-  → 独立执行进程 → codex exec resume <原会话ID>
+  → 常驻控制器 → 官方 codex app-server（stdio JSON-RPC）
+      首次接入：thread/resume；后续每轮：turn/start
+      完成回执：turn/completed
   → 原会话历史 → /api/messages → 浏览器
 ```
 
 ### 使用边界
 
-- Mac 上需安装并登录 Codex CLI。使用 CLI 自身的账号和模型配置，不在网页填写 API Key。
-- CLI 与桌面共享会话历史，但不能同时写入。桌面即使没有生成回复，也可能仍持有写入锁；遇到占用提示，请先结束占用的 CLI 或退出桌面应用以释放会话，再重试。不会自动杀进程或删除锁文件。
-- 这不是桌面实时控制模式。CLI 写入的历史在桌面上可能需要重新打开会话才能看到。
+- Mac 上需安装并登录 Codex CLI。常驻服务使用本机账号和模型配置，桌面 App 可以关闭。
+- 常驻服务与其他 CLI / 桌面进程共享会话历史，但不能同时写入。遇到占用提示，需要先释放原进程持有的会话。常驻服务也会持续持有已加载会话；若要交还其他客户端，需停止 `local.agent-phone.codex` 服务，再由其他客户端接入。不会自动杀掉其他进程或删除锁文件。
+- 这不是桌面实时同步模式。在其他客户端查看更新时可能需要重新打开会话。
 - 同一会话只允许一个发送任务；正在执行的会话会被拒绝发送。首版不支持忙碌时排队、引导或中止任务。
 - 原会话为只读时保持只读；其他会话最多使用 `workspace-write`，不启用完全访问模式，也不自动批准额外权限。需要授权时回 Mac 处理。
 - 断线后不要复制消息重复发送。页面保留请求编号，可点“确认发送结果”；网关重启后不会自动重跑同一请求。
 - “结果待确认”需要先核对会话历史，再手动结束记录，不会自动重试。明确失败的消息会恢复到输入框，供用户决定是否再发送。
 - 浏览器必须可使用本地存储，以保存待确认请求。切换会话保留的普通草稿只在当前页面内存中，刷新页面不会保留普通草稿。
 
-后台任务和执行日志保存在 Mac 的 `~/.config/agent-phone/control/`，目录权限为 700，任务数据库和日志为 600，包含消息内容，不提交到仓库。任务执行进程独立于 HTTP 网关，已验证网关重启时继续执行。存储暂未自动清理。
+任务数据库和服务日志保存在 Mac 的 `~/.config/agent-phone/control/`，目录权限为 700，任务数据库和日志为 600，包含消息内容，不提交到仓库。常驻控制器通过用户私有的 `runtime.sock` 接收唤醒和健康查询，不开放 Codex 的公网端口。HTTP 网关重启不影响常驻进程和会话。存储暂未自动清理。
+
+服务异常退出后会重新启动并按需恢复历史；连接中断时，正在执行的请求标记为“结果待确认”，不会自动重放。明确尚未开始的队列请求可以继续处理。
+
+查看常驻服务：`launchctl print gui/$(id -u)/local.agent-phone.codex`。重启使用 `launchctl kickstart -k gui/$(id -u)/local.agent-phone.codex`；它会中断尚未完成的轮次，操作前应先检查任务状态。查看日志：`runtime.log` 记录服务生命周期与请求错误，`app-server.stderr.log` 记录 Codex 标准错误。
 
 ### 接口与验证
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/control` | 查询客户端发送能力和当前防跨站请求令牌 |
+| `GET /api/control` | 查询发送能力、防跨站请求令牌和常驻服务健康状态 |
 | `POST /api/send` | 以唯一请求编号提交消息；相同编号与内容重复提交返回原任务 |
 | `GET /api/jobs?id=<请求编号>` | 查询执行状态 |
 | `POST /api/jobs/acknowledge` | 用户核对结果后结束一条不明确的记录，不自动重发 |
@@ -111,13 +118,14 @@ python3 tools/test_gateway_http.py
 node --check app.js
 ```
 
-已实测浏览器发送、原会话回复读取、回执丢失后重试、网关重启期间任务继续以及重复请求只执行一次。入口调研及版本限制见 [Codex 发送验证](docs/CODEX-CONTROL.md)。下一步分别接入 WorkBuddy、DeepSeek Harness，再考虑审批与桌面实时同步。
+已实测连续两轮共用同一个 Codex PID、只恢复一次会话并记住上一轮内容；重启 HTTP 网关后该 PID 保持不变；受控重启 app-server 后可从历史恢复上下文。浏览器回执丢失重试、重复提交和原会话回复展示也已验证。入口调研及版本限制见 [Codex 发送验证](docs/CODEX-CONTROL.md)。下一步分别接入 WorkBuddy、DeepSeek Harness，再考虑审批与桌面实时同步。
 
 ## 结构
 
 - `index.html`、`styles.css`、`app.js`：无构建步骤的原生前端。
 - `server.py`：Python 标准库 HTTP 网关，提供静态文件及 `/api/usage`、`/api/sessions`、`/api/messages`。
-- `control.py`：发送适配、私有任务存储和独立执行进程，目前实现 Codex CLI 续接。
+- `control.py`：发送能力查询、私有任务存储、请求编号与会话校验。
+- `codex_runtime.py`：常驻控制器，维护官方 app-server 连接和已加载会话，处理回执与断线恢复。
 - `tools/`：日志格式探测、私人网络部署脚本和 HTTP 访问边界测试。
 - [开发计划](docs/DEV-PLAN.md)：外网访问及手机控制的方案记录。
 

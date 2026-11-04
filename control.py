@@ -1,19 +1,12 @@
-"""Durable, single-writer message jobs. Each job runs outside the HTTP process.
-
-The first adapter uses Codex CLI resume. It never steals a desktop writer lock,
-changes account settings, or automatically grants tool approvals.
-"""
-import argparse
+"""Durable message jobs dispatched by the persistent Codex app-server runtime."""
 from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import sqlite3
-import subprocess
-import sys
-import threading
 import time
 import uuid
 
@@ -78,6 +71,9 @@ class ControlService:
                 rollout TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pid INTEGER
             )""")
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+            if "turn_id" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN turn_id TEXT")
         self.db_path.chmod(0o600)
 
     @contextmanager
@@ -90,14 +86,35 @@ class ControlService:
         finally:
             conn.close()
 
+    def runtime_call(self, method="status"):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                sock.connect(str(self.db_path.parent / "runtime.sock"))
+                sock.sendall((json.dumps({"method": method}) + "\n").encode())
+                data = b""
+                while b"\n" not in data and len(data) < 65536:
+                    part = sock.recv(4096)
+                    if not part:
+                        break
+                    data += part
+                result = json.loads(data.split(b"\n", 1)[0])
+                return result if isinstance(result, dict) else {"ready": False}
+        except (OSError, ValueError):
+            return {"ready": False}
+
     def capabilities(self):
+        runtime = self.runtime_call() if self.enabled and self.codex else {"ready": False}
+        ready = bool(runtime.get("ready"))
+        reason = ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
+                  "Mac 未找到 Codex CLI。" if not self.codex else
+                  "Codex 常驻服务尚未就绪，正在等待连接。" if not ready else
+                  "Codex 常驻会话已连接，可连续发送消息。")
         return {
-            "codex": {
-                "available": bool(self.codex) and self.enabled, "mode": "cli-resume",
-                "reason": ("发送仅在私人部署中开启，请将 Mac 网关绑定回环地址。" if not self.enabled else
-                           "CLI 续接原会话；桌面可能需要重新打开会话。" if self.codex else "Mac 未找到 Codex CLI。"),
-                "note": "桌面持有会话时会拒绝发送；不要在两端同时操作同一会话。需要额外授权时请回 Mac 处理。",
-            },
+            "codex": {"available": bool(self.codex) and self.enabled and ready,
+                      "mode": "app-server", "reason": reason,
+                      "note": "同一会话一次执行一条消息；需要额外权限时请回 Mac 处理。",
+                      "runtime": {k: runtime.get(k) for k in ("ready", "appServerPid", "loadedSessions")}},
             "workbuddy": {"available": False, "reason": "WorkBuddy 发送入口尚未接通。"},
             "dsh": {"available": False, "reason": "DeepSeek Harness 发送入口尚未接通。"},
         }
@@ -106,7 +123,7 @@ class ControlService:
     def public(row):
         return {"id": row["id"], "source": row["source"], "session": row["session"],
                 "status": row["status"], "message": row["message"],
-                "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
+                "createdAt": row["created_at"], "updatedAt": row["updated_at"], "turnId": row["turn_id"]}
 
     def get(self, job_id):
         with self.db() as conn:
@@ -114,7 +131,7 @@ class ControlService:
         if row is None:
             raise ControlError("job_not_found", "没有找到这条发送记录。", 404)
         # A worker normally survives gateway restarts. Never re-run an ambiguous job.
-        if row["status"] in ACTIVE and time.time() * 1000 - row["created_at"] > 30000:
+        if row["status"] in ("starting", "running") and time.time() * 1000 - row["created_at"] > 30000:
             alive = False
             if row["pid"]:
                 try:
@@ -127,10 +144,10 @@ class ControlService:
                 return self.get(job_id)
         return self.public(row)
 
-    def update(self, job_id, status, message, pid=None):
+    def update(self, job_id, status, message, pid=None, turn_id=None):
         with self.db() as conn:
-            conn.execute("UPDATE jobs SET status=?, message=?, updated_at=?, pid=COALESCE(?,pid) WHERE id=?",
-                         (status, message, int(time.time() * 1000), pid, job_id))
+            conn.execute("UPDATE jobs SET status=?, message=?, updated_at=?, pid=COALESCE(?,pid), turn_id=COALESCE(?,turn_id) WHERE id=?",
+                         (status, message, int(time.time() * 1000), pid, turn_id, job_id))
 
     def acknowledge(self, job_id):
         job = self.get(job_id)
@@ -173,7 +190,8 @@ class ControlService:
                 return self.get(job_id)
         capability = self.capabilities().get(source)
         if not capability or not capability["available"]:
-            raise ControlError("unsupported_source", (capability or {}).get("reason", "此客户端尚未接通发送。"), 501)
+            code = "runtime_unavailable" if source == "codex" and self.enabled and self.codex else "unsupported_source"
+            raise ControlError(code, (capability or {}).get("reason", "此客户端尚未接通发送。"), 503 if code == "runtime_unavailable" else 501)
         path = find_session(sid, source)
         if not path:
             raise ControlError("session_not_found", "没有找到这段本机会话，请刷新会话列表。", 404)
@@ -191,97 +209,9 @@ class ControlService:
                                   (source, sid)).fetchone()
             if active:
                 raise ControlError("session_busy", "这段会话已有发送任务，或上次结果待确认，请先查看发送状态。", 409)
-            conn.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，准备启动 Codex。", now, now, None))
-        try:
-            log_path = self.db_path.parent / (job_id + ".log")
-            fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as log:
-                worker = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve()), "--worker", job_id,
-                     "--db", str(self.db_path), "--codex", self.codex],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                    start_new_session=True, close_fds=True,
-                )
-            with self.db() as conn:
-                conn.execute("UPDATE jobs SET pid=? WHERE id=?", (worker.pid, job_id))
-            threading.Thread(target=worker.wait, daemon=True).start()
-        except OSError:
-            self.update(job_id, "failed", "无法启动 Codex 执行进程，消息未送出。")
+            conn.execute("INSERT INTO jobs (id,source,session,fingerprint,text,cwd,rollout,status,message,created_at,updated_at,pid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None))
+        # Wake is only a hint. The runtime also polls durable queued jobs, so losing
+        # this IPC response never means the user message should be submitted again.
+        self.runtime_call("wake")
         return self.get(job_id)
-
-
-def run_worker(service, job_id):
-    with service.db() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
-    if not row or row["status"] != "queued":
-        return
-    service.update(job_id, "starting", "正在启动 Codex CLI。", os.getpid())
-    error_path = service.db_path.parent / (job_id + ".stderr.log")
-    proc = None
-    try:
-        # A desktop turn may have started since the HTTP request was accepted.
-        _, sandbox = session_context(row["rollout"], with_policy=True)
-        fd = os.open(str(error_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as err:
-            proc = subprocess.Popen(
-                [service.codex, "--ask-for-approval", "never", "exec", "--sandbox", sandbox,
-                 "--json", "--skip-git-repo-check", "resume", row["session"], "-"],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
-                cwd=row["cwd"], text=True, encoding="utf-8", errors="replace",
-            )
-            proc.stdin.write(row["text"] + "\n")
-            proc.stdin.close()
-            completed, failed = False, False
-            for line in proc.stdout:
-                print(line, end="", flush=True)
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                kind = event.get("type")
-                if kind == "thread.started" and event.get("thread_id") != row["session"]:
-                    raise RuntimeError("Codex resumed an unexpected thread")
-                if kind == "turn.started":
-                    service.update(job_id, "running", "Codex 正在执行，回复会显示在会话中。")
-                elif kind == "turn.completed":
-                    completed = True
-                elif kind in ("turn.failed", "error"):
-                    failed = True
-            code = proc.wait()
-        if code == 0 and completed and not failed:
-            service.update(job_id, "completed", "执行完成。桌面若未更新，请重新打开会话。")
-        else:
-            stderr = error_path.read_text(encoding="utf-8", errors="replace")
-            if "active writer" in stderr or "thread-store conflict" in stderr:
-                message = "桌面仍持有这段会话，CLI 无法接管。请先在 Mac 释放会话后重试；本次未执行。"
-            elif "auth" in stderr.lower() or "not logged in" in stderr.lower():
-                message = "Codex 登录或连接失败，请在 Mac 检查 CLI 登录状态和网络。"
-            else:
-                message = "Codex 执行失败或需要额外权限。请查看会话及 Mac 上的执行日志后再决定是否重试。"
-            service.update(job_id, "failed", message)
-    except ControlError as exc:
-        service.update(job_id, "failed", exc.message)
-    except (FileNotFoundError, PermissionError):
-        if proc is None:
-            service.update(job_id, "failed", "会话文件或 Codex CLI 不可用，本次未开始执行。")
-        else:
-            service.update(job_id, "unknown", "执行文件访问异常，结果待确认。请先检查会话历史。")
-    except Exception:
-        if proc and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-        service.update(job_id, "unknown", "执行异常，结果待确认。请先检查会话历史，避免重复执行。")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", required=True)
-    parser.add_argument("--db", required=True)
-    parser.add_argument("--codex", required=True)
-    args = parser.parse_args()
-    run_worker(ControlService(args.db, args.codex), args.worker)

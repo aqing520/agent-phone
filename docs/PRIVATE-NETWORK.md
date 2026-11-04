@@ -32,7 +32,7 @@ python3 tools/install_mac_relay.py <服务器IP> --key ~/.ssh/id_ed25519_agent_p
 
 ## 运行与排查
 
-- Mac 的两个 LaunchAgent：`local.agent-phone.gateway`、`local.agent-phone.tunnel`，用户登录后启动，退出后自动重启；日志在 `~/Library/Logs/agent-phone/`。
+- Mac 的三个 LaunchAgent：`local.agent-phone.gateway`（网页网关）、`local.agent-phone.tunnel`（SSH 隧道）、`local.agent-phone.codex`（常驻控制器及其官方 app-server 子进程），用户登录后启动，退出后自动重启；启动日志在 `~/Library/Logs/agent-phone/`。
 - Mac 必须保持开机、已登录、联网且不休眠。LaunchAgent 不是登录前的系统服务。
 - 服务器服务：`systemctl status wg-quick@apwg0`；查看握手：`wg show apwg0`，不要使用会显示私钥的 `wg showconf` 或 `wg show all dump`。
 - 连接开关打开不等于握手成功。如果没有最近握手，检查公网 UDP 51820 的云防火墙规则以及手机网络。
@@ -49,6 +49,6 @@ Mac 使用 `launchctl bootout gui/$(id -u)/local.agent-phone.tunnel` 停止隧�
 
 ## 发送功能
 
-私人通道同时承载只读接口和 Codex 的发送/状态接口，不需要新增公网端口。刷新手机页面后即可使用 CLI 续接发送。请求编号和任务状态保存在 Mac；消息从浏览器经私人通道交给 Mac 执行，云端不负责运行 Codex。
+私人通道同时承载只读接口和 Codex 的发送/状态接口，不需要新增公网端口。刷新手机页面后即可使用常驻 Codex 会话。请求编号和任务状态保存在 Mac；消息从浏览器经私人通道交给 Mac 上的官方 `codex app-server` 执行，云端不负责运行 Codex，也不需要打开桌面 App。
 
-手机页面使用本地存储保留待确认请求，HTTP 回执丢失时可复用原编号确认结果。执行 worker 独立于网关，已验证网关重启不会重复启动任务。不要将网关改为公网可访问：目前的防跨站令牌不是用户账号认证，多人隔离尚未实现。
+手机页面使用本地存储保留待确认请求，HTTP 回执丢失时可复用原编号确认结果。常驻控制器独立于网关，已验证网关重启不会重启 Codex 或重复发送任务。同一会话首次恢复后可以连续多轮使用；Codex 连接中断时，不自动重放结果不明的消息。不要将网关改为公网可访问：目前的防跨站令牌不是用户账号认证，多人隔离尚未实现。

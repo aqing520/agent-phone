@@ -1056,7 +1056,7 @@ async function pollSendJobs(){
   controlUI.polling = true;
   try{
     for(const p of controlUI.pending.values()){
-      if(!SEND_ACTIVE.has(p.status) || p.status === 'unknown') continue;
+      if(!SEND_ACTIVE.has(p.status)) continue;
       try{
         const d = await controlFetch('/api/jobs?id=' + encodeURIComponent(p.id));
         applySendJob(p, d.job);
@@ -1093,7 +1093,7 @@ function updateSendState(){
   input.placeholder = !selected ? '请选择会话' : capability?.available ? '发送到当前会话…' : '此客户端暂不支持发送';
   let message = !selected ? '请选择一段会话。' : !controlUI.csrf ? '发送网关未连接，正在检查…'
     : controlUI.loading ? '正在载入会话…' : capability?.reason || '此客户端尚未接通发送。';
-  if(selected && capability?.available && !p) message += ' 请勿在桌面和手机同时操作同一会话。';
+  if(selected && capability?.available && !p) message += ' 同一会话可连续对话。';
   if(p) message = p.message || message;
   if(controlUI.errors.has(key)) message = controlUI.errors.get(key);
   $('#sendStatusText').textContent = message;
@@ -1193,7 +1193,7 @@ updateSendState();
 loadControl();
 pollSendJobs();
 setInterval(pollSendJobs, 2000);
-setInterval(()=>{ if(!document.hidden && !controlUI.csrf) loadControl(); }, 15000);
+setInterval(()=>{ if(!document.hidden) loadControl(); }, 15000);
 
 // 接入真实用量与会话列表，之后每 30 秒轮询
 syncUsage(false);

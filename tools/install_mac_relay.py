@@ -26,6 +26,14 @@ def main():
         "ProcessType": "Background",
     }
     jobs = {
+        "local.agent-phone.codex": {
+            "ProgramArguments": ["/usr/bin/python3", str(root / "codex_runtime.py")],
+            "WorkingDirectory": str(root),
+            "EnvironmentVariables": {
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                "PYTHONUNBUFFERED": "1",
+            },
+        },
         "local.agent-phone.gateway": {
             "ProgramArguments": ["/usr/bin/python3", str(root / "server.py")],
             "WorkingDirectory": str(root),

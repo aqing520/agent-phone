@@ -2,7 +2,9 @@
 
 面向手机的多智能体工作台，通过 Mac 本地网关读取 WorkBuddy、Codex 和 DeepSeek Harness 的用量与会话记录。
 
-## 本地手动启动
+## 使用方案
+
+### 方案一 · 同一局域网直连
 
 需要 Python 3。读取 DeepSeek Harness 正文还需要系统命令 `zstd`。
 
@@ -10,11 +12,11 @@
 python3 server.py
 ```
 
-本机访问 `http://localhost:5173`；同一局域网内的手机访问 `http://<Mac 的局域网 IP>:5173`。
+Mac 浏览器打开 `http://localhost:5173`。手机和 Mac 连到同一个网络后，在 Mac 的「系统设置 → 网络」查看当前连接的 IPv4 地址，再用手机浏览器打开 `http://<Mac 的局域网 IP>:5173`。
 
 手动启动默认监听 `0.0.0.0:5173`，只提供查看，发送能力关闭；尚无应用层鉴权，仅适合可信局域网，不应直接暴露到公网。下面的私人远程部署会将 Mac 网关改为只监听 `127.0.0.1:5173` 并启用发送。
 
-## 网络方案：WireGuard + SSH 反向隧道
+### 方案二 · 服务器转发（WireGuard + SSH 反向隧道）
 
 截至 2026-11-04，个人远程访问的网络通道已部署，已验证手机 WireGuard 握手、云端到 Mac 看板的访问及用量/会话接口。Codex 和 DeepSeek Harness 通过 Mac 上按需启动的运行时执行手机发来的消息。
 
@@ -42,16 +44,25 @@ Mac 没有公网 IP 也可以使用：Mac 主动连接云服务器的 SSH 端口
 | Mac | `codex_runtime.py` + `codex app-server` | 按需启动 Codex 进程，复用会话处理连续消息 |
 | Mac | SSH 客户端 | 保持反向隧道，断线后由 `launchd` 重新启动 |
 
-### 部署与使用
+#### 部署与使用
 
-- 服务器安装脚本：`tools/setup_private_relay.sh`；云安全组放行入站 UDP 51820，SSH 需可达。不开放公网 TCP 5173。
-- Mac 安装脚本：`tools/install_mac_relay.py`；安装 `local.agent-phone.codex`、`local.agent-phone.gateway` 和 `local.agent-phone.tunnel` 三个基础 LaunchAgent；检测到 DeepSeek Harness CLI 时另外安装 `local.agent-phone.dsh`。
-- 手机导入独立 WireGuard 配置，开启连接后打开 `http://10.77.73.1:5173`。不修改手机 DNS，也不接管其他上网流量。
-- 私钥、手机配置、二维码保存在仓库之外，不提交到 GitHub。换服务器需要迁移隧道，并更新手机配对配置。
+1. 在 Ubuntu 服务器安装 `wireguard-tools` 和 `qrencode`。云安全组放行入站 UDP 51820，确保 Mac 能访问服务器的 SSH 端口。公网 TCP 5173 保持关闭。
+2. 在 Mac 的项目目录运行以下命令。把示例地址换成服务器的公网 IPv4，并确认服务器的 SSH 主机指纹。
+
+   ```sh
+   relay_ip=203.0.113.10
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_agent_phone_tunnel -N ''
+   scp tools/setup_private_relay.sh "root@${relay_ip}:/tmp/setup_private_relay.sh"
+   ssh "root@${relay_ip}" "bash /tmp/setup_private_relay.sh ${relay_ip}" < ~/.ssh/id_ed25519_agent_phone_tunnel.pub
+   python3 tools/install_mac_relay.py "${relay_ip}" --key ~/.ssh/id_ed25519_agent_phone_tunnel
+   ```
+
+3. 用手机 WireGuard 导入服务器上的 `/etc/agent-phone/phone.conf`，或扫描 `/etc/agent-phone/phone-qr.png`。开启连接后，用手机浏览器打开 `http://10.77.73.1:5173`。
+4. Mac 安装脚本会启动网关、SSH 隧道和 Codex 控制器，检测到 DeepSeek Harness CLI 时也会安装其控制器。手机配置和二维码包含私钥，应存放在仓库之外。
 
 完整安装、排查和停用步骤见 [私人远程访问](docs/PRIVATE-NETWORK.md)。
 
-### 当前边界
+#### 当前边界
 
 - Mac 必须保持开机、用户已登录、联网且不休眠；网关和隧道不依赖当前聊天窗口运行。
 - 会话和智能体仍在 Mac 上，云端不保存会话副本。平时保持隧道连接，页面发起请求时返回数据。

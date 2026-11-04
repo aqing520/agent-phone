@@ -25,6 +25,15 @@ ACP 的 `end_turn` 也可能对应模型出错或被阻止。适配器查验发�
 
 WorkBuddy 的下一步是用已授权的测试应用验证本地助理 API，核对消息实际落在哪条对话、是否能对应现有本地会话，以及请求回执丢失后能否核对结果。在能指定旧会话之前，第三方发送入口可以单独作为「WorkBuddy 助理」，旧会话续聊使用官方移动端。当前尚未做 OAuth 或发送实测。
 
+### 第三方接入验证顺序
+
+1. 在开放平台创建可申请 `user.localassistant.readable` 和 `user.localassistant.invokable` 的测试应用，核对账号是否具备创建权限、审核要求及回调地址白名单。公开文档举例使用 HTTPS 回调，尚未验证平台是否接受 Mac 本地回环地址。
+2. 由账号所有者完成 OAuth 授权。应用密钥和访问凭证由 Mac 后端保存，再查询本地助理在线状态。
+3. 发送一条带唯一标记的测试消息，用返回的 `message_id` 查询后续回复，并在桌面核对落点。公开 API 未提供历史桌面会话 ID 或工作目录，因此首版按独立助理入口设计。发送回执丢失时先核对历史。
+4. 需要续聊已有桌面会话时，使用 WorkBuddy 手机 App 的「连接电脑」。第三方接口的验证不要求先改 agent-phone 的 WireGuard 部署。
+
+[第三方应用注册与权限](https://open.workbuddy.cn/docs/third-party-app) · [OAuth 与本地助理接口](https://open.workbuddy.cn/docs/openapi)
+
 ## 开源项目参考
 
 | 项目 | 可以借鉴的实现 |

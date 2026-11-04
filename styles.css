@@ -737,5 +737,8 @@ button.section__more{
 
 
 .chat-model{ padding:6px 16px; font-size:12px; color:var(--ink-3); }
-.chat-model select{ margin-left:6px; max-width:80%; border:1px solid #d7ddeb; border-radius:8px; padding:4px 8px; background:white; color:var(--ink); font:inherit; }
+.chat-model select{ margin-left:6px; max-width:calc(100% - 92px); border:1px solid #d7ddeb; border-radius:8px; padding:4px 8px; background:white; color:var(--ink); font:inherit; }
 .new-chat__model label{ display:block; margin-bottom:6px; }
+.new-chat__model select{ width:calc(100% - 55px); }
+.model-refresh{ border:0; background:transparent; padding:4px; color:#165db6; font:inherit; }
+.model-refresh:disabled{ opacity:.45; }

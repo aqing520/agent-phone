@@ -42,6 +42,7 @@ for line in sys.stdin:
  if i=='permissions-check' and m is None:
   send({'method':'turn/completed','params':{'threadId':permission_sid,'turn':{'id':permission_tid,'status':'completed'}}});continue
  if m=='initialize':send({'id':i,'result':{}})
+ elif m=='model/list':send({'id':i,'result':{'data':[{'model':'test-model','displayName':'Test Model'}]}})
  elif m=='thread/start':send({'id':i,'result':{'thread':{'id':str(uuid.uuid4())}}})
  elif m=='thread/resume':send({'id':i,'result':{'thread':{'id':p['threadId']}}})
  elif m=='thread/unsubscribe':
@@ -123,6 +124,15 @@ for line in sys.stdin:
         self.assertEqual(self.service.submit(payload, None)['session'], job['session'])
         self.assertEqual(len(self.methods('thread/start')), 1)
         self.assertEqual(self.methods('turn/start')[0]['params']['threadId'], job['session'])
+
+    def test_refresh_model_catalog_without_leaving_runtime_running(self):
+        self.assertEqual(self.service.refresh_models("codex"), {"test-model": "Test Model"})
+        self.assertIsNone(self.service.runtime_call()["appServerPid"])
+        payload = {**self.payload(), "model": "test-model"}
+        self.assertEqual(self.finish(self.submit(payload))["status"], "completed")
+        self.assertEqual(self.methods("turn/start")[0]["params"]["model"], "test-model")
+        with self.assertRaises(ControlError):
+            self.submit({**payload, "model": "different-model"})
 
     def test_worker_and_gateway_restart_do_not_resend(self):
         payload = self.payload('quote " ; $(touch should-not-exist)')

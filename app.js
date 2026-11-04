@@ -949,9 +949,9 @@ function newRequestId(){
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 
-async function controlFetch(url, options={}){
+async function controlFetch(url, options={}, timeout=15000){
   const abort = new AbortController();
-  const timer = setTimeout(()=>abort.abort(), 15000);
+  const timer = setTimeout(()=>abort.abort(), timeout);
   try{
     const r = await fetch(url, { ...options, cache:'no-store', signal:abort.signal });
     const d = await r.json();
@@ -995,9 +995,30 @@ async function toggleRuntime(button){
   }
 }
 
-function renderDshModels(select, label, selected){
+const refreshingModels = new Set();
+async function refreshModelList(source){
+  if(!controlUI.csrf || !controlUI.sources?.[source]?.available || refreshingModels.has(source)) return;
+  refreshingModels.add(source);
+  updateSendState();
+  updateNewChat();
+  try{
+    const data = await controlFetch('/api/control/models', {
+      method:'POST', headers:{'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf},
+      body:JSON.stringify({source}),
+    }, 26000);
+    controlUI.sources[source].models = data.models;
+    toast('模型列表已刷新');
+  }catch(e){ toast(e.message); }
+  finally{
+    refreshingModels.delete(source);
+    updateSendState();
+    updateNewChat();
+  }
+}
+
+function renderModelList(select, source, label, selected){
   const value = selected ?? select.value;
-  const models = controlUI.sources?.dsh?.models || {};
+  const models = controlUI.sources?.[source]?.models || {};
   const signature = JSON.stringify(models);
   if(select.dataset.models !== signature){
     select.replaceChildren(new Option(label, ''));
@@ -1092,7 +1113,7 @@ async function send(){
   if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
   if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
   const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
-    model:a.source === 'dsh' ? $('#chatModel').value || undefined : undefined,
+    model:$('#chatModel').value || undefined,
     status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
   controlUI.pending.set(key, p);
   if(!persistSends()){
@@ -1168,8 +1189,8 @@ function updateNewChat(){
     if(available) source.value = available.value;
   }
   source.disabled = !!newChatPending;
-  $('#newChatModelRow').hidden = source.value !== 'dsh';
-  renderDshModels($('#newChatModel'), 'Harness 默认模型', newChatPending?.model);
+  renderModelList($('#newChatModel'), source.value, '使用默认模型', newChatPending?.model);
+  $('#refreshNewModels').disabled = !!newChatPending || !controlUI.sources?.[source.value]?.available || refreshingModels.has(source.value);
   $('#newChatModel').disabled = !!newChatPending;
   $('#newChatProject').disabled = !!newChatPending;
   $('#newChatText').readOnly = !!newChatPending;
@@ -1234,7 +1255,7 @@ async function createChat(event){
       const text = $('#newChatText').value.trim();
       if(!text) return;
       const request = {requestId:newRequestId(), source, project:$('#newChatProject').value, text,
-        model:source === 'dsh' ? $('#newChatModel').value || undefined : undefined};
+        model:$('#newChatModel').value || undefined};
       localStorage.setItem(NEW_CHAT_STORAGE, JSON.stringify(request));
       newChatPending = request;
     }
@@ -1295,11 +1316,13 @@ function updateSendState(){
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
   const ready = available && !busy && input.value.trim().length > 0;
   const model = $('#chatModel');
-  $('#chatModelRow').hidden = !selected || a.source !== 'dsh';
-  if(selected && a.source === 'dsh'){
-    renderDshModels(model, '沿用会话模型', model.dataset.session === key ? undefined : '');
+  const canChooseModel = selected && ['codex', 'dsh'].includes(a.source);
+  $('#chatModelRow').hidden = !canChooseModel;
+  if(canChooseModel){
+    renderModelList(model, a.source, '沿用会话模型', model.dataset.session === key ? undefined : '');
     model.dataset.session = key;
     model.disabled = !available || busy;
+    $('#refreshChatModels').disabled = !available || busy || refreshingModels.has(a.source);
   }
   btn.disabled = !ready;
   btn.classList.toggle('is-ready', !!ready);
@@ -1358,6 +1381,8 @@ function bind(){
   $('#closeNewChat').addEventListener('click', ()=>$('#newChatDialog').close());
   $('#newChatForm').addEventListener('submit', createChat);
   $('#newChatSource').addEventListener('change', updateNewChat);
+  $('#refreshNewModels').addEventListener('click', ()=>refreshModelList($('#newChatSource').value));
+  $('#refreshChatModels').addEventListener('click', ()=>refreshModelList(state.realSessionSource));
   $$('[data-heat-mode]').forEach(button=>button.addEventListener('click', ()=>{
     heatMode = button.dataset.heatMode;
     $$('[data-heat-mode]').forEach(b=>b.setAttribute('aria-pressed', String(b === button)));

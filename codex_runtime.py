@@ -28,7 +28,7 @@ class AppServerClient:
     arguments = ("app-server", "--stdio", "-c", "thread_unload_delay_secs=0")
     envelope = {}
 
-    def __init__(self, binary, log_path, on_notification):
+    def __init__(self, binary, log_path, on_notification, *, extra_args=()):
         self.on_notification = on_notification
         self.pending = {}
         self.lock = threading.RLock()
@@ -39,7 +39,7 @@ class AppServerClient:
         self.log = os.fdopen(fd, "w")
         try:
             self.proc = subprocess.Popen(
-                [binary, *self.arguments], stdin=subprocess.PIPE,
+                [binary, *self.arguments, *extra_args], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=self.log, text=True,
                 encoding="utf-8", errors="replace", bufsize=1,
             )
@@ -166,9 +166,46 @@ class RuntimeDaemon:
         self.active = {}
         self.loaded = set()
         self.releasing = {}
+        self.catalog_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.server = None
+
+    def open_client(self, on_notification, *, extra_args=()):
+        return self.client_type(self.binary(), self.service.db_path.parent / self.stderr_name,
+                                on_notification, extra_args=extra_args)
+
+    def discover_models(self):
+        with self.lock:
+            client = self.client
+        temporary = not client or client.closed.is_set()
+        if temporary:
+            client = self.open_client(lambda *_: None)
+        try:
+            params = {"limit": 100, "includeHidden": False}
+            models = {}
+            while True:
+                page = client.request("model/list", params, timeout=8)
+                models.update({entry["model"]: entry["displayName"] for entry in page["data"]})
+                if not page.get("nextCursor"):
+                    return models
+                params["cursor"] = page["nextCursor"]
+        finally:
+            if temporary:
+                client.close()
+
+    def refresh_models(self):
+        if not self.catalog_lock.acquire(blocking=False):
+            return {"error": "模型列表正在刷新，请稍后重试。"}
+        try:
+            models = self.discover_models()
+            self.service.save_models(self.source, models)
+            return {"models": models}
+        except Exception as exc:
+            self.record("model_catalog_failed", source=self.source, error=str(exc)[:2000])
+            return {"error": "读取模型列表失败，请检查 Mac 上的运行时。"}
+        finally:
+            self.catalog_lock.release()
 
     def status(self):
         with self.lock:
@@ -256,11 +293,14 @@ class RuntimeDaemon:
                     self.loaded.add(sid)
                 self.record("thread_resumed", session=sid, pid=client.proc.pid)
             stage = "start"
-            result = client.request("turn/start", {
+            params = {
                 "threadId": sid, "clientUserMessageId": row["id"],
                 "approvalPolicy": "never",
                 "input": [{"type": "text", "text": row["text"], "text_elements": []}],
-            })
+            }
+            if row["model"]:
+                params["model"] = row["model"]
+            result = client.request("turn/start", params)
             with self.lock:
                 entry = self.active.get(sid)
                 if entry and entry["job"] == row["id"] and self.client is client:
@@ -369,12 +409,16 @@ class RuntimeDaemon:
                         request = json.loads(self.rfile.readline(4096))
                         if not isinstance(request, dict):
                             return
-                        if request.get("method") not in ("status", "wake", "release"):
+                        if request.get("method") not in ("status", "wake", "release", "models"):
                             return
                         if request["method"] == "wake":
                             owner.wake.set()
-                        result = (owner.release(request["session"])
-                                  if request["method"] == "release" else owner.status())
+                        if request["method"] == "release":
+                            result = owner.release(request["session"])
+                        elif request["method"] == "models":
+                            result = owner.refresh_models()
+                        else:
+                            result = owner.status()
                         self.wfile.write((json.dumps(result) + "\n").encode())
                     except (OSError, ValueError):
                         pass
@@ -413,7 +457,7 @@ class RuntimeDaemon:
                 last_busy = time.monotonic()
             if queued and not self.client:
                 try:
-                    client = self.client_type(self.binary(), root / self.stderr_name, self.notification)
+                    client = self.open_client(self.notification)
                     with self.lock:
                         self.client = client
                     self.record("runtime_started", source=self.source, pid=client.proc.pid)

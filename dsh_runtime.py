@@ -2,7 +2,9 @@
 import argparse
 import json
 import signal
+import tempfile
 import time
+from pathlib import Path
 from uuid import UUID
 
 from codex_runtime import AppServerClient, RpcError, RuntimeDaemon
@@ -42,23 +44,65 @@ class DeepSeekRuntime(RuntimeDaemon):
         super()._recover()
         self.model_options.clear()
 
+    def open_client(self, on_notification, *, extra_args=()):
+        overlay = self.service.db_path.parent / "dsh-provider.patch.yml"
+        provider_args = ("--patch", str(overlay)) if overlay.is_file() else ()
+        return super().open_client(on_notification, extra_args=(*provider_args, *extra_args))
+
+    def discover_models(self):
+        # Use the real profile and credentials while isolating the probe's session.
+        with tempfile.TemporaryDirectory(prefix="agent-phone-models-") as root:
+            patch = Path(root) / "catalog.json"
+            patch.write_text(json.dumps([
+                {"id": "session-persistence-jsonl", "config": {"root": root + "/sessions"}},
+                {"id": "session-projection-cache", "disabled": True},
+            ]))
+            client = self.open_client(lambda *_: None, extra_args=("--patch", str(patch)))
+            try:
+                # Provider catalog plugins hydrate asynchronously after initialization.
+                time.sleep(1)
+                result = client.request("session/new", {"cwd": root, "mcpServers": []}, timeout=8)
+                models = {}
+                for config in result.get("configOptions", []):
+                    if config.get("category") != "model":
+                        continue
+                    for group in config.get("options", []):
+                        for choice in group.get("options", [group]):
+                            label = f"{group['name']} · {choice['name']}" if "group" in group else choice["name"]
+                            models[choice["value"]] = label
+                client.request("session/close", {"sessionId": result["sessionId"]}, timeout=5)
+                return models
+            finally:
+                client.close()
+
     def select_model(self, client, sid, model):
         config = self.model_options.get(sid) or {}
         current = config.get("currentValue")
-        provider = json.loads(current)[0] if current else None
-        selected = next(
-            (choice["value"] for item in config.get("options", [])
-             for choice in item.get("options", [item])
-             if json.loads(choice["value"])[1] == model
-             and (not provider or json.loads(choice["value"])[0] == provider)),
-            None,
-        )
+        if model.startswith("["):
+            selected = model
+        else:
+            # Previously queued jobs contain a model name instead of a full route.
+            provider = json.loads(current)[0] if current else None
+            selected = next(
+                (choice["value"] for item in config.get("options", [])
+                 for choice in item.get("options", [item])
+                 if json.loads(choice["value"])[1] == model
+                 and (not provider or json.loads(choice["value"])[0] == provider)),
+                None,
+            )
         if not selected:
             raise RpcError("requested model unavailable")
         if selected != current:
-            result = client.request("session/set_config_option", {
-                "sessionId": sid, "configId": config["id"], "value": selected,
-            })
+            params = {"sessionId": sid, "configId": "model", "value": selected}
+            try:
+                result = client.request("session/set_config_option", params)
+            except RpcError:
+                # A newly started ACP can receive the selection before providers finish loading.
+                time.sleep(1)
+                try:
+                    result = client.request("session/set_config_option", params)
+                except RpcError as exc:
+                    raise RpcError("requested model unavailable", exc.data) from exc
             self.remember_options(sid, result)
 
     def remember_options(self, sid, result):
@@ -138,7 +182,7 @@ class DeepSeekRuntime(RuntimeDaemon):
             if not prompting and ("active write handle" in detail or "already active" in detail):
                 message = "其他 DeepSeek 进程仍持有这段会话，请释放后重试。"
             elif "requested model unavailable" in detail:
-                message = "当前 DeepSeek 账号未提供所选模型，请切换模型后重试。"
+                message = "所选 DeepSeek 模型路由不可用，请刷新列表或切换模型后重试。"
             elif not prompting:
                 message = "无法打开 DeepSeek 会话，请检查项目目录和会话状态。"
             else:

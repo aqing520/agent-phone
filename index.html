@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <title>工作台</title>
 <link rel="manifest" href="manifest.webmanifest" />
-<link rel="stylesheet" href="styles.css?v=20261104-runtime2" />
+<link rel="stylesheet" href="styles.css?v=20261104-models1" />
 </head>
 <body>
 
@@ -125,6 +125,7 @@
     <div id="chatModelRow" class="chat-model" hidden>
       <label for="chatModel">模型</label>
       <select id="chatModel"></select>
+      <button type="button" class="model-refresh" id="refreshChatModels">刷新</button>
     </div>
     <div class="send-status" id="sendStatus" role="status" aria-live="polite">
       <span id="sendStatusText">正在检查发送通道…</span>
@@ -214,9 +215,10 @@
       <option value="codex">Codex</option>
       <option value="dsh">DeepSeek Harness</option>
     </select>
-    <div id="newChatModelRow" class="new-chat__model" hidden>
+    <div class="new-chat__model">
       <label for="newChatModel">模型</label>
       <select id="newChatModel"></select>
+      <button type="button" class="model-refresh" id="refreshNewModels">刷新</button>
     </div>
     <label for="newChatProject">项目</label>
     <select id="newChatProject"></select>
@@ -232,6 +234,6 @@
 </dialog>
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=20261104-runtime2"></script>
+<script src="app.js?v=20261104-models1"></script>
 </body>
 </html>

@@ -15,11 +15,6 @@ ACTIVE = ("queued", "starting", "running")
 MAX_MESSAGE = 12000
 DATA_DIR = Path.home() / ".config" / "agent-phone" / "control"
 BUNDLED_DSH = Path("/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")
-DSH_MODELS = {
-    "deepseek-v4-flash": "DeepSeek V4 Flash",
-    "deepseek-flash": "DeepSeek V4.1 Flash",
-    "deepseek-v4-pro": "DeepSeek V4 Pro",
-}
 RUNTIME_SOCKETS = {"codex": "runtime.sock", "dsh": "dsh-runtime.sock"}
 
 
@@ -82,6 +77,7 @@ class ControlService:
             )""")
             columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
             conn.execute("CREATE TABLE IF NOT EXISTS runtime_settings (source TEXT PRIMARY KEY, enabled INTEGER NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS model_catalogs (source TEXT PRIMARY KEY, models TEXT NOT NULL)")
             if "model" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN model TEXT")
             if "turn_id" not in columns:
@@ -101,7 +97,7 @@ class ControlService:
     def runtime_call(self, method="status", *, source="codex", **params):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(14 if method == "release" else 2)
+                sock.settimeout({"release": 14, "models": 23}.get(method, 2))
                 sock.connect(str(self.db_path.parent / RUNTIME_SOCKETS[source]))
                 sock.sendall((json.dumps({"method": method, **params}) + "\n").encode())
                 data = b""
@@ -144,6 +140,24 @@ class ControlService:
             conn.execute("INSERT OR REPLACE INTO runtime_settings VALUES (?, ?)", (source, enabled))
         self.runtime_call("wake", source=source)
 
+    def save_models(self, source, models):
+        if models:
+            with self.db() as conn:
+                conn.execute("INSERT OR REPLACE INTO model_catalogs VALUES (?, ?)", (source, json.dumps(models)))
+
+    def refresh_models(self, source):
+        if not self.enabled:
+            raise ControlError("unsupported_source", "当前网关未启用会话控制。", 403)
+        if not isinstance(source, str) or source not in RUNTIME_SOCKETS:
+            raise ControlError("invalid_request", "客户端无效。")
+        with self.db() as conn:
+            if not self.runtime_enabled(conn, source):
+                raise ControlError("runtime_disabled", "请先在设置中开启此客户端的手机发送。", 409)
+        result = self.runtime_call("models", source=source)
+        if not result.get("models"):
+            raise ControlError("catalog_unavailable", result.get("error", "暂时无法刷新模型，请稍后重试。"), 503)
+        return result["models"]
+
     def capabilities(self):
         sources = {"workbuddy": {"available": False, "reason": "WorkBuddy 发送入口尚未接通。"}}
         with self.db() as conn:
@@ -168,7 +182,9 @@ class ControlService:
                     "toggle": bool(self.enabled and binary), "mode": mode, "reason": reason,
                     "release": connected, "runtime": runtime,
                 }
-        sources["dsh"]["models"] = DSH_MODELS
+            for row in conn.execute("SELECT source, models FROM model_catalogs"):
+                if row["source"] in RUNTIME_SOCKETS:
+                    sources[row["source"]]["models"] = json.loads(row["models"])
         return sources
 
     @staticmethod
@@ -236,7 +252,7 @@ class ControlService:
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE:
             raise ControlError("invalid_text", f"消息不能为空，且最多 {MAX_MESSAGE} 字。")
         model = payload.get("model")
-        if model is not None and (source != "dsh" or not isinstance(model, str) or model not in DSH_MODELS):
+        if model is not None and (source not in RUNTIME_SOCKETS or not isinstance(model, str) or len(model) > 512):
             raise ControlError("invalid_model", "所选模型不可用。")
         text = text.strip()
         identity = [source, sid, text]
@@ -252,6 +268,8 @@ class ControlService:
                     raise ControlError("request_conflict", "同一请求标识不能用于不同消息。", 409)
                 return self.get(job_id)
         capability = self.capabilities().get(source)
+        if model is not None and model not in (capability or {}).get("models", {}):
+            raise ControlError("invalid_model", "所选模型已不可用，请刷新模型列表。")
         if capability and capability.get("enabled") is False and self.enabled:
             raise ControlError("runtime_disabled", "请先在设置中开启此客户端的手机发送。", 409)
         if not capability or not capability["available"]:

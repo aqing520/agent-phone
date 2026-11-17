@@ -1,0 +1,7 @@
+{
+  "name": "agent-phone-desktop-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs"
+}

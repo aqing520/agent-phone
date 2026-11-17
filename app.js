@@ -392,7 +392,7 @@ async function setArchive(sid, archived){
     });
     const data = await response.json();
     if(!response.ok) throw new Error(data.error?.message || '归档失败');
-    toast(archived ? '已在手机平台归档，未同步桌面' : '已恢复会话');
+    toast(data.scope === 'desktop' ? (archived ? '已同步归档到 DeepSeek 桌面' : '已同步恢复到 DeepSeek 桌面') : (archived ? '已在手机平台归档，未同步桌面' : '已恢复手机归档'));
     await loadSessions(); renderSessionList(); renderProjects();
   }catch(e){ toast(e.message); }
 }
@@ -404,7 +404,9 @@ function renderSessionList(){
   const matches = group
     ? available.filter(s=>projectKey(s) === group.key)
     : available;
-  $('#sessTitle').textContent = archiveView ? '手机归档（不同步桌面）' : (group?.name || '会话历史');
+  const nativeArchive = state.realSessions.some(s=>s.source === 'dsh' && s.archiveScope === 'desktop');
+  $('#archiveScopeNote').textContent = nativeArchive ? '归档与 DeepSeek 桌面共用原生状态。' : '桌面桥接未连接，目前仅保存手机归档。';
+  $('#sessTitle').textContent = archiveView ? (nativeArchive ? 'DeepSeek 已归档' : '手机归档（不同步桌面）') : (group?.name || '会话历史');
   if(!matches.length){
     $('#sessMeta').textContent = '';
     list.innerHTML = `<div class="sess__empty">未连接到本机网关<br>暂无真实会话记录</div>`;
@@ -1397,7 +1399,7 @@ function updateSendState(){
   const busy = controlUI.submitting.has(key) || SEND_ACTIVE.has(p?.status);
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
   const ready = available && !busy && (input.value.trim().length > 0 || (a.source === 'dsh' && selectedImages.length > 0));
-  $('#btnAttach').disabled = !available || busy || a?.source !== 'dsh';
+  $('#btnAttach').disabled = !available || busy || a?.source !== 'dsh' || !capability?.runtime?.imageInput;
   const model = $('#chatModel');
   const canChooseModel = selected && ['codex', 'dsh'].includes(a.source);
   $('#chatModelRow').hidden = !canChooseModel;

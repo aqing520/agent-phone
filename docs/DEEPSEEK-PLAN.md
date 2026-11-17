@@ -35,10 +35,20 @@
 - ACP `session/prompt` 使用官方 `image` content block；模型拒绝图片时返回明确提示。
 - 历史解析支持内联图片和 DeepSeek content-addressed attachment 引用，校验 SHA-256 后才展示。
 - 新增 `tools/test_dsh_images.py`，不调用模型。
+- 网页仅在 DeepSeek 控制器报告 `runtime.imageInput=true` 时启用图片按钮，避免旧控制器静默丢弃附件。
+- 当前代码尚未重启在线 DeepSeek 控制器；它可能正在执行本次手机任务，不能在任务中强制重启。真实端到端验收与部署仍待完成。
+
+### 第四批：原生同步桥接（代码及隔离测试完成，安装待授权）
+
+- 在桌面 Host 内调用 workspaceRegistry，不建立第二个 workspace 数据写入者。
+- 私有 socket 仅提供状态、归档、恢复、登记到已有 workspace。
+- 网关连通后读取桌面原生归档集；未连通时明确标注手机独立归档。
+- 插件安装被沙箱拒绝，扩大权限批准已取消；没有绕过限制。
+- 安装步骤及尚需真实验收的内容见 [DEEPSEEK-SYNC.md](DEEPSEEK-SYNC.md)。
 
 ### 尚未完成
 
-1. DeepSeek 桌面 workspace/未分组接入及原生归档同步：桌面服务没有对当前网关公开可用的 listener，不能直接写私有 workspace 状态。
+1. 获得桌面 profile 安装许可、加载插件并验证桌面 workspace/原生归档双向变化。
 2. 使用明确支持图片的 DeepSeek 模型做一次真实端到端验收。
 3. DeepSeek 定向回归：桌面交接、归档恢复、图片失败场景。
 

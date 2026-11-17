@@ -1,0 +1,6 @@
+# Add this entry to ~/.dsh/profiles/desktop/cordis.patch.yml after installing
+# tools/dsh-desktop-bridge with the official dsh plugin command.
+- id: agent-phone-desktop-bridge
+  name: agent-phone-desktop-bridge
+  config:
+    directory: /Users/zyw/.config/agent-phone/control

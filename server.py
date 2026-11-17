@@ -32,6 +32,7 @@ from collections import defaultdict
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from control import ControlService, ControlError
 from phone_archive import PhoneArchive
+from dsh_desktop import desktop_call
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKBUDDY = os.path.expanduser("~/.workbuddy")
@@ -1092,8 +1093,11 @@ def get_sessions():
             _cache2["data"] = s
             _cache["at"] = now
             _cache2["at"] = now
-        archived = set(PhoneArchive().ids())
-        return [dict(s, archived=s.get("source") == "dsh" and s.get("id") in archived)
+        desktop = desktop_call()
+        native = bool(desktop.get('ready') and not desktop.get('error'))
+        archived = set(desktop.get('archived', [])) if native else set(PhoneArchive().ids())
+        return [dict(s, archived=s.get("source") == "dsh" and s.get("id") in archived,
+                     archiveScope='desktop' if native else 'phone')
                 for s in _cache2["data"]]
 
 
@@ -1190,7 +1194,14 @@ class Handler(SimpleHTTPRequestHandler):
                         or not re.fullmatch(r"(?:session-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", sid)
                         or not find_control_session(sid, "dsh")):
                     raise ControlError("session_not_found", "没有找到 DeepSeek 主会话。", 404)
-                self._json({"archived": PhoneArchive().set(sid, payload["archived"]), "scope": "phone"})
+                desktop = desktop_call()
+                if desktop.get('ready') and not desktop.get('error'):
+                    result = desktop_call('archive' if payload['archived'] else 'restore', sid)
+                    if result.get('error') or not result.get('ready'):
+                        raise ControlError('desktop_archive_failed', result.get('error', '桌面连接中断'), 409)
+                    self._json({'archived': result.get('archived', []), 'scope': 'desktop'})
+                else:
+                    self._json({"archived": PhoneArchive().set(sid, payload["archived"]), "scope": "phone"})
                 return
             if path == "/api/control/models":
                 if not isinstance(payload, dict):

@@ -9,6 +9,7 @@ from uuid import UUID
 
 from codex_runtime import AppServerClient, RpcError, RuntimeDaemon
 from control import ControlService
+from dsh_desktop import desktop_call
 from server import _dsh_events
 
 
@@ -111,6 +112,9 @@ class DeepSeekRuntime(RuntimeDaemon):
             None,
         )
 
+    def status(self):
+        return {**super().status(), "imageInput": True}
+
     def binary(self):
         return self.service.dsh
 
@@ -203,6 +207,8 @@ class DeepSeekRuntime(RuntimeDaemon):
                         conn.execute("UPDATE jobs SET pid=NULL WHERE id=?", (row["id"],))
                 del self.active[sid]
         self.wake.set()
+        if status == 'completed':
+            desktop_call('attach', sid)
 
     def release(self, sid):
         with self.lock:

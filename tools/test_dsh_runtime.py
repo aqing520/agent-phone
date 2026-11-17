@@ -38,7 +38,8 @@ class DeepSeekTests(unittest.TestCase):
                     events = [previous]
                     if reason:
                         events.append({"type": "turn/end", "seq": 25, "data": {"turn": 2, "reason": {"kind": reason}}})
-                    with patch("dsh_runtime._dsh_events", side_effect=([previous], events)), \
+                    with patch('dsh_runtime.desktop_call', return_value={'ready':False}), \
+                         patch("dsh_runtime._dsh_events", side_effect=([previous], events)), \
                          patch("dsh_runtime.time.monotonic", side_effect=(0, 3)):
                         runtime._start_job(row, client)
                     result = service.get(job["id"])

@@ -24,6 +24,7 @@ class ArchiveTests(unittest.TestCase):
     def test_annotation_does_not_change_cached_sessions_or_other_sources(self):
         raw = [{'id':'main', 'source':'dsh'}, {'id':'other', 'source':'codex'}]
         with patch.object(server, '_cache2', {'data':raw, 'at':server.time.time()}), \
+             patch.object(server, 'desktop_call', return_value={'ready':False}), \
              patch.object(server, 'PhoneArchive') as archive:
             archive.return_value.ids.return_value = ['main', 'other']
             result = server.get_sessions()

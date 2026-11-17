@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import time
 import uuid
+from dsh_images import validate_images
 
 
 ACTIVE = ("queued", "starting", "running")
@@ -78,6 +79,8 @@ class ControlService:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
             conn.execute("CREATE TABLE IF NOT EXISTS runtime_settings (source TEXT PRIMARY KEY, enabled INTEGER NOT NULL)")
             conn.execute("CREATE TABLE IF NOT EXISTS model_catalogs (source TEXT PRIMARY KEY, models TEXT NOT NULL)")
+            if "images" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN images TEXT NOT NULL DEFAULT '[]'")
             if "model" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN model TEXT")
             if "turn_id" not in columns:
@@ -249,7 +252,13 @@ class ControlService:
             raise ControlError("invalid_id", "发送请求或会话标识无效。")
         if not isinstance(source, str):
             raise ControlError("unsupported_source", "请选择已接入的客户端。")
-        if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE:
+        try:
+            images = validate_images(payload.get("images", []))
+        except ValueError as exc:
+            raise ControlError("invalid_images", str(exc))
+        if images and source != "dsh":
+            raise ControlError("invalid_images", "图片目前只支持 DeepSeek。")
+        if not isinstance(text, str) or (not text.strip() and not images) or len(text) > MAX_MESSAGE:
             raise ControlError("invalid_text", f"消息不能为空，且最多 {MAX_MESSAGE} 字。")
         model = payload.get("model")
         if model is not None and (source not in RUNTIME_SOCKETS or not isinstance(model, str) or len(model) > 512):
@@ -260,6 +269,8 @@ class ControlService:
             identity.append(payload["project"])
         if model is not None:
             identity.append({"model": model})
+        if images:
+            identity.append({"images": images})
         fingerprint = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
         with self.db() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -305,8 +316,8 @@ class ControlService:
                                   (source, sid)).fetchone()
             if active:
                 raise ControlError("session_busy", "这段会话已有发送任务，或上次结果待确认，请先查看发送状态。", 409)
-            conn.execute("INSERT INTO jobs (id,source,session,fingerprint,text,cwd,rollout,status,message,created_at,updated_at,pid,model) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None, model))
+            conn.execute("INSERT INTO jobs (id,source,session,fingerprint,text,cwd,rollout,status,message,created_at,updated_at,pid,model,images) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (job_id, source, sid, fingerprint, text, cwd, str(path), "queued", "已受理，等待常驻会话处理。", now, now, None, model, json.dumps(images)))
         # Wake is only a hint. The runtime also polls durable queued jobs, so losing
         # this IPC response never means the user message should be submitted again.
         self.runtime_call("wake", source=source)

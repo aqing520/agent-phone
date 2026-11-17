@@ -134,11 +134,13 @@
       <button type="button" id="btnReleaseSession" hidden>释放会话</button>
     </div>
     <footer class="composer">
+      <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
+      <div id="imagePreview" class="image-preview" hidden></div>
       <button class="pro-pill" id="proPill">
         <svg viewBox="0 0 24 24" class="ic"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" /></svg>
         Pro
       </button>
-      <button class="icon-btn icon-btn--flat" aria-label="附件">
+      <button class="icon-btn icon-btn--flat" id="btnAttach" aria-label="添加图片">
         <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="4" width="18" height="16" rx="3.5" /><circle cx="8.6" cy="10" r="1.6" /><path d="M4.5 17.5 9.8 12.6l3.2 3 3-2.6 3.5 3.4" /></svg>
       </button>
       <div class="input-wrap">

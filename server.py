@@ -594,6 +594,32 @@ def parse_dsh_sessions():
     return out
 
 
+def dsh_content_images(content):
+    out = []
+    if not isinstance(content, list): return out
+    for block in content:
+        if not isinstance(block, dict) or block.get('type') != 'image': continue
+        mime = block.get('mimeType') or block.get('mediaType')
+        data = block.get('data')
+        ref = block.get('attachment') or {}
+        attachment_id = ref.get('attachmentId', '')
+        if re.fullmatch(r'sha256:[a-f0-9]{64}', attachment_id):
+            digest = attachment_id.split(':')[1]
+            path = os.path.join(DSH, 'attachments', 'v1', 'objects', digest[:2], digest)
+            try:
+                import base64, hashlib
+                with open(path, 'rb') as stream:
+                    raw = stream.read(8 * 1024 * 1024 + 1)
+                if len(raw) <= 8 * 1024 * 1024 and hashlib.sha256(raw).hexdigest() == digest:
+                    data = base64.b64encode(raw).decode()
+                    mime = ref.get('mediaType')
+            except OSError:
+                pass
+        if mime in ('image/png','image/jpeg','image/webp','image/gif') and isinstance(data, str) and len(data) <= 12_000_000:
+            out.append({'mimeType': mime, 'data': data})
+    return out
+
+
 def parse_dsh_messages(sid):
     events = _dsh_events(sid)
     header = next((e for e in events if e.get("type") == "session"), {})
@@ -608,15 +634,17 @@ def parse_dsh_messages(sid):
             if src != "user":
                 continue
             text = block_text(data.get("content")).strip()
-            if not text:
+            images = dsh_content_images(data.get("content"))
+            if not text and not images:
                 continue
-            out.append({"role": "user", "text": text, "ts": nn(e.get("time"))})
+            out.append({"role": "user", "text": text, "images": images, "ts": nn(e.get("time"))})
         elif t == "assistant/message":
             msg = data.get("message") or {}
             text = block_text(msg.get("content")).strip()
-            if not text:
+            images = dsh_content_images(msg.get("content"))
+            if not text and not images:
                 continue
-            out.append({"role": "assistant", "text": text, "ts": nn(e.get("time"))})
+            out.append({"role": "assistant", "text": text, "images": images, "ts": nn(e.get("time"))})
     for m in out:
         if len(m["text"]) > MAX_CHARS:
             m["text"] = m["text"][:MAX_CHARS]
@@ -1139,7 +1167,8 @@ class Handler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             raise ControlError("invalid_length", "请求长度无效。")
-        if length <= 0 or length > 65536:
+        limit = 17 * 1024 * 1024 if urlsplit(self.path).path == '/api/send' else 65536
+        if length <= 0 or length > limit:
             raise ControlError("invalid_length", "发送请求为空或过大。", 413)
         self.connection.settimeout(15)
         try:

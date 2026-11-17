@@ -162,7 +162,7 @@ class DeepSeekRuntime(RuntimeDaemon):
             after_seq = max((event.get("seq", 0) for event in _dsh_events(sid)), default=0)
             prompting = True
             result = client.request("session/prompt", {
-                "sessionId": sid, "prompt": [{"type": "text", "text": row["text"]}],
+                "sessionId": sid, "prompt": ([{"type": "text", "text": row["text"]}] if row["text"] else []) + json.loads(row["images"]),
             }, timeout=3600)
             reason = result.get("stopReason")
             turn = self.committed_turn(sid, after_seq) if reason == "end_turn" else None
@@ -179,7 +179,9 @@ class DeepSeekRuntime(RuntimeDaemon):
             detail = f"{exc} {exc.data}"
             self.record("dsh_request_failed", job=row["id"], error=detail[:2000])
             status = "failed"
-            if not prompting and ("active write handle" in detail or "already active" in detail):
+            if "image" in detail.lower() and ("not declare" in detail.lower() or "not advertised" in detail.lower() or "not supported" in detail.lower()):
+                message = "当前 DeepSeek 连接或模型不支持图片输入，请选择支持图片的模型后重试。"
+            elif not prompting and ("active write handle" in detail or "already active" in detail):
                 message = "其他 DeepSeek 进程仍持有这段会话，请释放后重试。"
             elif "requested model unavailable" in detail:
                 message = "所选 DeepSeek 模型路由不可用，请刷新列表或切换模型后重试。"

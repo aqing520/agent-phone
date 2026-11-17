@@ -457,6 +457,8 @@ async function openSessSheet(project = null){
 }
 
 async function loadRealSession(id, source){
+  const nextKey = sendKey(source || state.realSessions.find(s=>s.id === id)?.source || 'workbuddy', id);
+  if(nextKey !== controlUI.selected){ selectedImages = []; renderImagePreview(); }
   rememberDraft();
   if(!$('#viewChat').classList.contains('is-active')){
     $('#viewHome').classList.remove('is-active');
@@ -495,7 +497,7 @@ async function loadRealSession(id, source){
     slot.title = d.title || sess.title || '未命名会话';
     slot.messages = (d.messages || []).map(m=>({
       role: m.role === 'user' ? 'me' : 'agent',
-      text: m.text,
+      text: m.text, images:m.images || [],
     }));
 
     if(!slot.messages.length){
@@ -763,7 +765,7 @@ function renderSession(){
   lastMsgRole = null;
   s.messages.forEach(m=>{
     const showWho = !(m.role !== 'me' && lastMsgRole === 'agent');
-    addMsg(m.role, m.text, a, false, showWho);
+    addMsg(m.role, m.text, a, false, showWho, m.images);
     lastMsgRole = m.role === 'me' ? 'me' : 'agent';
   });
   box.scrollTop = box.scrollHeight;
@@ -775,7 +777,11 @@ function renderSession(){
 
 const MSG_LIMIT = 1400;   // 单条超过这个字数先折叠
 
-function addMsg(role, text, agent, isNew=true, showWho=true){
+function imageMarkup(images){
+  return (images || []).filter(x=>['image/png','image/jpeg','image/webp','image/gif'].includes(x.mimeType) && typeof x.data === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(x.data)).map(x=>`<img class="message-image" src="data:${x.mimeType};base64,${x.data}" alt="会话图片" loading="lazy">`).join('');
+}
+
+function addMsg(role, text, agent, isNew=true, showWho=true, images=[]){
   const wrap = document.createElement('div');
   wrap.className = 'msg ' + (role === 'me' ? 'msg--me' : 'msg--agent')
     + (isNew ? '' : ' msg--static') + (showWho ? '' : ' msg--cont');
@@ -783,13 +789,13 @@ function addMsg(role, text, agent, isNew=true, showWho=true){
   const long = text && text.length > MSG_LIMIT;
 
   if(role === 'me'){
-    wrap.innerHTML = `<div class="bubble">${esc(long ? text.slice(0, MSG_LIMIT) + '…' : text)}</div>`;
+    wrap.innerHTML = `<div class="bubble">${imageMarkup(images)}${esc(long ? text.slice(0, MSG_LIMIT) + '…' : text)}</div>`;
   } else {
     wrap.innerHTML = `
       ${showWho ? `<div class="who">
         <span class="agent__logo">${LOGO[agent.id]}</span>${agent.name}
       </div>` : ''}
-      <div class="body">${text ? md(long ? text.slice(0, MSG_LIMIT) : text) : ''}</div>
+      <div class="body">${imageMarkup(images)}${text ? md(long ? text.slice(0, MSG_LIMIT) : text) : ''}</div>
     `;
   }
 
@@ -837,7 +843,7 @@ function appendMessages(list, agent){
   const box = $('#messages');
   list.forEach(m=>{
     const showWho = !(m.role !== 'me' && lastMsgRole === 'agent');
-    addMsg(m.role, m.text, agent, false, showWho);
+    addMsg(m.role, m.text, agent, false, showWho, m.images);
     lastMsgRole = m.role === 'me' ? 'me' : 'agent';
   });
   if(nearBottom(box)) scrollBottom(true);
@@ -853,7 +859,7 @@ function replaceLastMessage(m, agent){
     : null;
   lastMsgRole = prev ? (prev.role === 'me' ? 'me' : 'agent') : null;
   const showWho = !(m.role !== 'me' && lastMsgRole === 'agent');
-  addMsg(m.role, m.text, agent, false, showWho);
+  addMsg(m.role, m.text, agent, false, showWho, m.images);
   if(nearBottom(box)) scrollBottom(true);
 }
 
@@ -872,7 +878,7 @@ async function pollSession(){
 
     const msgs = (d.messages || []).map(m=>({
       role: m.role === 'user' ? 'me' : 'agent',
-      text: m.text,
+      text: m.text, images:m.images || [],
     }));
     const slot = sessions[src];
     if(!slot) return;
@@ -972,7 +978,7 @@ try{
   const saved = JSON.parse(localStorage.getItem(SEND_STORAGE) || '[]');
   if(Array.isArray(saved)) saved.slice(-20).forEach(p=>{
     if(p && /^[0-9a-f-]{36}$/.test(p.id) && /^[0-9a-f-]{36}$/.test(p.session)
-       && p.source === 'codex' && typeof p.text === 'string' && p.text.length <= 12000){
+       && ['dsh','codex'].includes(p.source) && typeof p.text === 'string' && p.text.length <= 12000){
       controlUI.pending.set(sendKey(p.source, p.session), p);
     }
   });
@@ -1126,7 +1132,7 @@ async function submitPending(p){
     if(!controlUI.csrf) throw new Error('网关未连接');
     const d = await controlFetch('/api/send', {
       method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
-      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, model:p.model || undefined }),
+      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, images:p.images || [], model:p.model || undefined }),
     });
     // Only clear the exact submitted draft, never text typed while waiting or another chat.
     if(controlUI.selected === key && $('#input').value.trim() === p.text){
@@ -1157,15 +1163,36 @@ async function submitPending(p){
   }
 }
 
+let selectedImages = [];
+function renderImagePreview(){
+  const box = $('#imagePreview'); if(!box) return;
+  box.hidden = !selectedImages.length;
+  box.innerHTML = selectedImages.map((x,i)=>`<span class="image-preview__item"><img src="${x.url}" alt="待发送图片"><button type="button" data-remove-image="${i}">×</button></span>`).join('');
+  $$('[data-remove-image]', box).forEach(b=>b.addEventListener('click',()=>{ selectedImages.splice(+b.dataset.removeImage,1); renderImagePreview(); updateSendState(); }));
+}
+async function readImages(files){
+  const key = controlUI.selected;
+  const allowed = new Set(['image/png','image/jpeg','image/webp','image/gif']);
+  for(const file of files){
+    if(!allowed.has(file.type) || file.size > 3 * 1024 * 1024){ toast('只支持 3 MB 内的 PNG/JPEG/WebP/GIF'); continue; }
+    const data = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(String(r.result).split(',')[1]); r.onerror=reject; r.readAsDataURL(file); });
+    if(key !== controlUI.selected) return;
+    selectedImages.push({mimeType:file.type, data, url:`data:${file.type};base64,${data}`});
+  }
+  selectedImages = selectedImages.slice(-4); renderImagePreview(); updateSendState();
+}
+
 async function send(){
   const a = agents[current], input = $('#input');
   const text = input.value.trim();
-  if(!text || !a?.source || a.source !== state.realSessionSource || !state.realSessionId || controlUI.loading) return;
+  if((!text && !selectedImages.length) || !a?.source || a.source !== state.realSessionSource || !state.realSessionId || controlUI.loading) return;
+  if(selectedImages.length && a.source !== 'dsh'){ toast('图片仅支持 DeepSeek'); return; }
   const key = sendKey(a.source, state.realSessionId);
   if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
   if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
   const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
     model:$('#chatModel').value || undefined,
+    images:selectedImages.map(({mimeType,data})=>({mimeType,data})),
     status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
   controlUI.pending.set(key, p);
   if(!persistSends()){
@@ -1175,6 +1202,9 @@ async function send(){
     return;
   }
   await submitPending(p);
+  if(p.status === 'completed' || p.status === 'running' || p.status === 'queued'){
+    selectedImages = []; renderImagePreview();
+  }
 }
 
 async function pollSendJobs(){
@@ -1366,7 +1396,8 @@ function updateSendState(){
   const p = controlUI.pending.get(key);
   const busy = controlUI.submitting.has(key) || SEND_ACTIVE.has(p?.status);
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
-  const ready = available && !busy && input.value.trim().length > 0;
+  const ready = available && !busy && (input.value.trim().length > 0 || (a.source === 'dsh' && selectedImages.length > 0));
+  $('#btnAttach').disabled = !available || busy || a?.source !== 'dsh';
   const model = $('#chatModel');
   const canChooseModel = selected && ['codex', 'dsh'].includes(a.source);
   $('#chatModelRow').hidden = !canChooseModel;
@@ -1433,6 +1464,13 @@ function bind(){
     renderSessionList();
   });
   $('#sessionBar').addEventListener('click', ()=>openSessSheet());
+  $('#btnAttach').addEventListener('click', ()=>$('#imageInput').click());
+  $('#imageInput').addEventListener('change', async e=>{
+    try{ await readImages([...e.target.files]); }
+    catch(error){ toast('图片读取失败，请重新选择'); }
+    finally{ e.target.value = ''; }
+  });
+
   $('#btnAllSessions').addEventListener('click', ()=>openSessSheet());
   $('#btnNewChat').addEventListener('click', ()=>showNewChat());
   $('#closeNewChat').addEventListener('click', ()=>$('#newChatDialog').close());

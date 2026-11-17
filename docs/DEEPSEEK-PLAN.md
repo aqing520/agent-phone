@@ -28,11 +28,19 @@
 - 已明确标注：这是手机平台归档，不代表 DeepSeek 桌面已同步。
 - 已添加隔离测试 `python3 tools/test_dsh_archive.py`。
 
+### 第三批：DeepSeek 图片链路（已实现，待真实兼容模型验收）
+
+- 手机选择 PNG/JPEG/WebP/GIF，限制单张 3 MB、最多 4 张，支持预览和移除。
+- 图片随 DeepSeek 任务持久保存，幂等指纹包含图片内容，网关限制格式、真实文件头和 base64。
+- ACP `session/prompt` 使用官方 `image` content block；模型拒绝图片时返回明确提示。
+- 历史解析支持内联图片和 DeepSeek content-addressed attachment 引用，校验 SHA-256 后才展示。
+- 新增 `tools/test_dsh_images.py`，不调用模型。
+
 ### 尚未完成
 
-1. DeepSeek 桌面 workspace/未分组接入状态。
-2. 图片：选图/拍照、预览/移除、安全上传、ACP image content、历史展示、大小格式限制及清理。
-3. DeepSeek 定向回归：新增/续聊、桌面交接、归档恢复、图片及失败场景。
+1. DeepSeek 桌面 workspace/未分组接入及原生归档同步：桌面服务没有对当前网关公开可用的 listener，不能直接写私有 workspace 状态。
+2. 使用明确支持图片的 DeepSeek 模型做一次真实端到端验收。
+3. DeepSeek 定向回归：桌面交接、归档恢复、图片失败场景。
 
 
 ## 验收边界

@@ -68,18 +68,28 @@ const agents = [
 
 /* ---------- 展示偏好（localStorage） ---------- */
 const HIDE_KEY = 'wg.hiddenAgents';
+const VISIBILITY_VERSION = 'wg.visibility.deepseek.v1';
 const hidden = (()=>{
   try{
-    const raw = localStorage.getItem(HIDE_KEY);
-    if(raw) return new Set(JSON.parse(raw));
+    // One-time migration to the DeepSeek-focused default; later choices persist.
+    if(localStorage.getItem(VISIBILITY_VERSION)){
+      const raw = JSON.parse(localStorage.getItem(HIDE_KEY) || 'null');
+      if(Array.isArray(raw) && raw.every(id=>typeof id === 'string')){
+        const selected = new Set(raw.filter(id=>agents.some(a=>a.id === id)));
+        if(selected.size < agents.length) return selected;
+      }
+    }
   }catch(e){ /* 读不到就用默认 */ }
-  // 首次打开：只展示真正在本机跑过的客户端
-  return new Set(agents.filter(a=>a.optional).map(a=>a.id));
+  return new Set(agents.filter(a=>a.id !== 'deepseek').map(a=>a.id));
 })();
 
 function saveHidden(){
-  try{ localStorage.setItem(HIDE_KEY, JSON.stringify([...hidden])); }catch(e){}
+  try{
+    localStorage.setItem(HIDE_KEY, JSON.stringify([...hidden]));
+    localStorage.setItem(VISIBILITY_VERSION, '1');
+  }catch(e){}
 }
+saveHidden();
 function isShown(a){ return !hidden.has(a.id); }
 function visibleAgents(){
   return agents.map((a,i)=>({ a, i })).filter(x=> isShown(x.a));
@@ -364,12 +374,37 @@ async function loadSessions(){
 }
 
 const SRC_LABEL = { workbuddy: 'WorkBuddy', codex: 'Codex', dsh: 'DeepSeek' };
+const sourceVisible = source => {
+  const agent = agents.find(a=>a.source === source);
+  return !agent || isShown(agent);
+};
+
+function visibleSessions(){
+  return state.realSessions.filter(s=>sourceVisible(s.source));
+}
+
+let archiveView = false;
+async function setArchive(sid, archived){
+  try{
+    const response = await fetch('/api/dsh/archive', {
+      method:'POST', headers:{'Content-Type':'application/json','X-Agent-Phone-CSRF':controlUI.csrf || ''},
+      body:JSON.stringify({session:sid, archived})
+    });
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error?.message || '归档失败');
+    toast(archived ? '已在手机平台归档，未同步桌面' : '已恢复会话');
+    await loadSessions(); renderSessionList(); renderProjects();
+  }catch(e){ toast(e.message); }
+}
 
 function renderSessionList(){
   const list = $('#sessList');
   const group = state.sessionProject;
-  const matches = group ? state.realSessions.filter(s=>projectKey(s) === group.key) : state.realSessions;
-  $('#sessTitle').textContent = group?.name || '会话历史';
+  const available = visibleSessions().filter(s=>Boolean(s.archived) === archiveView);
+  const matches = group
+    ? available.filter(s=>projectKey(s) === group.key)
+    : available;
+  $('#sessTitle').textContent = archiveView ? '手机归档（不同步桌面）' : (group?.name || '会话历史');
   if(!matches.length){
     $('#sessMeta').textContent = '';
     list.innerHTML = `<div class="sess__empty">未连接到本机网关<br>暂无真实会话记录</div>`;
@@ -382,23 +417,33 @@ function renderSessionList(){
     ? [...matches].sort((a, b)=> (b.source === src) - (a.source === src))
     : matches;
   list.innerHTML = rows.map(s=>`
-    <button class="sess ${s.id === state.realSessionId ? 'is-active' : ''}"
-            data-sid="${s.id}" data-src="${s.source || 'workbuddy'}">
-      <div class="sess__title">${esc(s.title)}</div>
-      <div class="sess__meta">
-        <span class="sess__src sess__src--${s.source || 'workbuddy'}">${SRC_LABEL[s.source] || s.source || '—'}</span>
-        <span class="sess__proj">${esc(s.project || '-')}</span>
-        <span>${s.rounds} 轮</span>
-        <span>${fmtTok(s.tokens)} tok</span>
-        <span>${relTime(s.endedAt || s.startedAt)}</span>
-      </div>
-    </button>
+    <div class="sess-row">
+      <button class="sess ${s.id === state.realSessionId ? 'is-active' : ''}"
+              data-sid="${s.id}" data-src="${s.source || 'workbuddy'}">
+        <div class="sess__title">${esc(s.title)}</div>
+        <div class="sess__meta">
+          <span class="sess__src sess__src--${s.source || 'workbuddy'}">${SRC_LABEL[s.source] || s.source || '—'}</span>
+          <span class="sess__proj">${esc(s.project || '-')}</span>
+          <span>${s.rounds} 轮</span>
+          <span>${fmtTok(s.tokens)} tok</span>
+          <span>${relTime(s.endedAt || s.startedAt)}</span>
+        </div>
+      </button>
+      ${s.source === 'dsh' ? `<button class="sess__archive" data-archive="${s.id}">${s.archived ? '恢复' : '归档'}</button>` : ''}
+    </div>
   `).join('');
 
   $$('.sess', list).forEach(el=>{
     el.addEventListener('click', ()=>{
       $('#sessMask').classList.remove('is-open');
       loadRealSession(el.dataset.sid, el.dataset.src);
+    });
+  });
+  $$('.sess__archive', list).forEach(el=>{
+    el.addEventListener('click', async e=>{
+      e.stopPropagation();
+      const item = rows.find(s=>s.id === el.dataset.archive);
+      await setArchive(el.dataset.archive, !item.archived);
     });
   });
 }
@@ -418,6 +463,11 @@ async function loadRealSession(id, source){
     $('#viewChat').classList.add('is-active');
   }
   const src = source || (state.realSessions.find(s=> s.id === id) || {}).source || 'workbuddy';
+  if(!sourceVisible(src)){
+    toast('该智能体已隐藏');
+    goHome();
+    return;
+  }
   state.realSessionId = id;
   state.realSessionSource = src;
   controlUI.loading = true;
@@ -482,7 +532,7 @@ const projectKey = s => s.projectKey || s.cwd || `unknown:${s.project || '未命
 
 function projectList(){
   const map = new Map();
-  for(const s of state.realSessions){
+  for(const s of visibleSessions().filter(s=>!s.archived)){
     const key = projectKey(s);
     let p = map.get(key);
     if(!p){
@@ -503,7 +553,7 @@ function renderProjects(){
   const row = $('#projRow');
   if(!row) return;
 
-  if(!state.realSessions.length){
+  if(!visibleSessions().length){
     row.innerHTML = `<div class="proj-empty">还没有可读的会话记录<br>网关连上后，这里按项目归最近的活动</div>`;
     return;
   }
@@ -634,6 +684,8 @@ function renderPicker(){
       renderPicker();
       renderAgents();
       renderChips();
+      renderSessionList();
+      renderProjects();
       // 正在看的那个被关掉了，回工作台，别停在它上面
       if(hiding && watching) goHome();
       const nm = (agents.find(a=>a.id===id) || {}).name || id;
@@ -871,7 +923,7 @@ async function pollSession(){
 async function openAgentConversation(a){
   if(!a.source) return false;
   if(!state.realSessions.length) await loadSessions();
-  const list = state.realSessions.filter(s=> s.source === a.source);
+  const list = state.realSessions.filter(s=> s.source === a.source && !s.archived);
   if(!list.length) return false;
   const keep = state.realSessionId && state.realSessionSource === a.source
     && list.some(s=> s.id === state.realSessionId);
@@ -1375,6 +1427,11 @@ function bind(){
     toast(on ? '已连接 ' + host : '未连接，点击设置');
   });
 
+  $('#archiveFilter').addEventListener('click', ()=>{
+    archiveView = !archiveView;
+    $('#archiveFilter').textContent = archiveView ? '返回未归档会话' : '查看手机归档';
+    renderSessionList();
+  });
   $('#sessionBar').addEventListener('click', ()=>openSessSheet());
   $('#btnAllSessions').addEventListener('click', ()=>openSessSheet());
   $('#btnNewChat').addEventListener('click', ()=>showNewChat());

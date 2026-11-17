@@ -31,6 +31,7 @@ from datetime import datetime
 from collections import defaultdict
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from control import ControlService, ControlError
+from phone_archive import PhoneArchive
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKBUDDY = os.path.expanduser("~/.workbuddy")
@@ -416,7 +417,7 @@ def _codex_first_user_text(path):
 
 # ============================================================
 # DeepSeek Harness（~/.dsh）
-# 统计口径在 session_projcache/sessions/<id>.json 里（权威）：
+# Projection cache 只用于加速统计与标题读取；会话日志头才是发现和身份依据。
 #   rows.tokenUsage.val.totals = {uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens}
 #   rows.title.val / rows.sessionStats.val.turns / identity.cwd createdAt
 # 正文在 sessions/<proj>/<session>/session.v4.jsonl.zstd（zstd 压缩的事件流）
@@ -497,23 +498,57 @@ def _dsh_events(sid):
     return events
 
 
+def dsh_session_catalog():
+    """Discover persisted sessions, not merely projection checkpoints.
+
+    Never infer child sessions from prompt text: user messages can legitimately
+    quote internal instructions. Delegation metadata is the authority.
+    """
+    catalog = {}
+    for name in ("session.v4.jsonl.zstd", "session.jsonl.zstd"):
+        for path in glob.glob(os.path.join(DSH, "sessions", "**", name), recursive=True):
+            sid = os.path.basename(os.path.dirname(path))
+            if sid in catalog:
+                continue
+            events = _dsh_events(sid)
+            header = next((e for e in events if e.get("type") == "session"), None)
+            if not header or header.get("id") != sid:
+                continue
+            catalog[sid] = (path, header, events)
+    return catalog
+
+
+def dsh_is_internal(header):
+    return bool(header.get("parentSessionId") or header.get("parentSession")
+                or header.get("delegationDepth", 0) or header.get("origin") == "subagent")
+
+
 def parse_dsh_sessions():
     out = []
-    for cf in iter_dsh_cache():
-        sid = os.path.basename(cf)[:-5]
+    for sid, (path, header, ev) in dsh_session_catalog().items():
+        if dsh_is_internal(header):
+            continue
+        cf = os.path.join(DSH, "storages", "session_projcache", "sessions", sid + ".json")
         try:
             meta = _dsh_meta(cf)
-        except Exception:
-            continue
-        s = _blank_session(sid, "dsh", cf)
+        except (OSError, ValueError, TypeError):
+            meta = {"title": None, "turns": 0, "uncached": 0, "output": 0,
+                    "cache_read": 0, "cache_write": 0}
+        s = _blank_session(sid, "dsh", path)
         try:
-            s["mtime"] = os.path.getmtime(cf)
+            s["mtime"] = os.path.getmtime(path)
         except OSError:
             s["mtime"] = 0
-        s["title"] = meta["title"]
-        s["cwd"] = meta["cwd"]
+        user_messages = [e for e in ev if e.get("type") == "user/message"
+                         and ((e.get("data") or {}).get("source") or {}).get("kind") == "user"]
+        if not user_messages:
+            continue  # Empty model probes and runtime-only sessions aren't conversations.
+        s["title"] = meta["title"] or next((block_text((e.get("data") or {}).get("content")).strip()[:120]
+                                            for e in user_messages
+                                            if block_text((e.get("data") or {}).get("content")).strip()), "图片会话")
+        s["cwd"] = header.get("cwd")
         s["project"] = project_label(s["cwd"], "dsh")
-        s["startedAt"] = meta["createdAt"] or None
+        s["startedAt"] = nn(header.get("createdAt")) or None
         s["input"] = meta["uncached"]
         s["output"] = meta["output"]
         s["cache_read"] = meta["cache_read"]
@@ -521,7 +556,6 @@ def parse_dsh_sessions():
         s["total"] = meta["uncached"] + meta["output"] + meta["cache_read"] + meta["cache_write"]
         s["rounds"] = meta["turns"]
         # 没有 sessionStats 的会话，数 assistant/message 事件
-        ev = _dsh_events(sid)
         if not s["rounds"] or not s["total"]:
             calls = sum(1 for e in ev if e.get("type") == "assistant/message")
             msgs = sum(1 for e in ev if e.get("type") in ("user/message", "assistant/message"))
@@ -561,8 +595,12 @@ def parse_dsh_sessions():
 
 
 def parse_dsh_messages(sid):
+    events = _dsh_events(sid)
+    header = next((e for e in events if e.get("type") == "session"), {})
+    if header and dsh_is_internal(header):
+        return []
     out = []
-    for e in _dsh_events(sid):
+    for e in events:
         t = e.get("type")
         data = e.get("data") or {}
         if t == "user/message":
@@ -1026,18 +1064,20 @@ def get_sessions():
             _cache2["data"] = s
             _cache["at"] = now
             _cache2["at"] = now
-        return _cache2["data"]
+        archived = set(PhoneArchive().ids())
+        return [dict(s, archived=s.get("source") == "dsh" and s.get("id") in archived)
+                for s in _cache2["data"]]
 
 
 def find_control_session(sid, source):
     if source == "codex":
         return find_codex_file(sid)
     if source == "dsh" and dsh_session_dir(sid):
-        cache_file = os.path.join(DSH, "storages", "session_projcache", "sessions", sid + ".json")
-        try:
-            return _dsh_meta(cache_file)["cwd"]
-        except (OSError, ValueError):
-            return None
+        events = _dsh_events(sid)
+        header = next((e for e in events if e.get("type") == "session"), {})
+        if header.get("id") == sid and not dsh_is_internal(header):
+            return header.get("cwd")
+        return None
     return None
 
 
@@ -1110,9 +1150,19 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         try:
             path = urlsplit(self.path).path
-            if path not in ("/api/send", "/api/jobs/acknowledge", "/api/sessions/release", "/api/control/runtime", "/api/control/models"):
+            if path not in ("/api/send", "/api/jobs/acknowledge", "/api/sessions/release", "/api/control/runtime", "/api/control/models", "/api/dsh/archive"):
                 raise ControlError("not_found", "没有这个接口。", 404)
             payload = self._read_post()
+            if path == "/api/dsh/archive":
+                if not isinstance(payload, dict) or not isinstance(payload.get("archived"), bool):
+                    raise ControlError("invalid_request", "归档状态必须是布尔值。")
+                sid = payload.get("session")
+                if (not isinstance(sid, str)
+                        or not re.fullmatch(r"(?:session-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", sid)
+                        or not find_control_session(sid, "dsh")):
+                    raise ControlError("session_not_found", "没有找到 DeepSeek 主会话。", 404)
+                self._json({"archived": PhoneArchive().set(sid, payload["archived"]), "scope": "phone"})
+                return
             if path == "/api/control/models":
                 if not isinstance(payload, dict):
                     raise ControlError("invalid_request", "请求必须是 JSON 对象。")

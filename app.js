@@ -1014,7 +1014,7 @@ function persistSends(){
     const values = [...controlUI.pending.values()];
     const active = values.filter(p=>SEND_ACTIVE.has(p.status));
     const recent = values.filter(p=>!SEND_ACTIVE.has(p.status)).sort((a,b)=>a.createdAt-b.createdAt).slice(-20);
-    const records = [...recent, ...active].map(({ preview, ...record })=>record);
+    const records = [...recent, ...active].map(({ preview, imagePayload, ...record })=>record);
     localStorage.setItem(SEND_STORAGE, JSON.stringify(records));
     return true;
   }catch(e){ return false; }
@@ -1022,27 +1022,46 @@ function persistSends(){
 
 // Image batches can exceed localStorage's quota. Keep their bytes in IndexedDB
 // until the gateway confirms the original request ID.
-async function pendingImageStore(mode, operation){
-  const db = await new Promise((resolve, reject)=>{
+function pendingImageStore(mode, operation){
+  return new Promise((resolve, reject)=>{
     const open = indexedDB.open('agent-phone.pendingImages', 1);
-    open.onupgradeneeded = ()=>open.result.createObjectStore('requests');
-    open.onsuccess = ()=>resolve(open.result);
-    open.onerror = ()=>reject(open.error);
+    let db, tx, finished = false;
+    const timer = setTimeout(()=>{
+      try{ tx?.abort(); }catch(e){}
+      finish(reject, new Error('Image storage timed out'));
+    }, 1500);
+    function finish(callback, value){
+      if(finished) return;
+      finished = true;
+      clearTimeout(timer);
+      db?.close();
+      callback(value);
+    }
+    open.onblocked = ()=>finish(reject, new Error('Image storage is blocked'));
+    open.onerror = ()=>finish(reject, open.error);
+    open.onupgradeneeded = ()=>{
+      if(finished) open.transaction.abort();
+      else open.result.createObjectStore('requests');
+    };
+    open.onsuccess = ()=>{
+      db = open.result;
+      if(finished){ db.close(); return; }
+      try{
+        tx = db.transaction('requests', mode);
+        const request = operation(tx.objectStore('requests'));
+        tx.oncomplete = ()=>finish(resolve, request.result);
+        tx.onabort = ()=>finish(reject, tx.error);
+      }catch(e){ finish(reject, e); }
+    };
   });
-  try{
-    return await new Promise((resolve, reject)=>{
-      const tx = db.transaction('requests', mode);
-      const request = operation(tx.objectStore('requests'));
-      tx.oncomplete = ()=>resolve(request.result);
-      tx.onabort = ()=>reject(tx.error);
-    });
-  }finally{ db.close(); }
 }
 
 function forgetPendingImages(p){
   if(p.hasImages) pendingImageStore('readwrite', store=>store.delete(p.id)).catch(()=>{});
   delete p.hasImages;
-  delete p.images; // Pending requests from older builds stored their images inline.
+  delete p.images;
+  delete p.imagePayload;
+  delete p.needsImages;
   delete p.preview;
 }
 
@@ -1186,13 +1205,25 @@ async function submitPending(p, firstAttempt = false){
   updateSendState();
   try{
     if(firstAttempt){
-      try{
-        if(p.hasImages){
-          const images = p.preview.map(({mimeType, data})=>({mimeType, data}));
-          await pendingImageStore('readwrite', store=>store.put(images, p.id));
+      const reattached = p.needsImages;
+      if(p.hasImages){
+        p.imagePayload = p.preview.map(({mimeType, data})=>({mimeType, data}));
+        try{ await pendingImageStore('readwrite', store=>store.put(p.imagePayload, p.id)); }
+        catch(e){
+          // Small batches can still survive a reload when IndexedDB is unavailable.
+          if(p.imagePayload.reduce((size, image)=>size + image.data.length, 0) <= 1024 * 1024){
+            p.images = p.imagePayload;
+          }
         }
-        if(!persistSends()) throw new Error('Pending send could not be saved');
-      }catch(e){
+      }
+      delete p.needsImages;
+      // Keep the original request ID even when only this tab can retain the images.
+      let saved = persistSends();
+      if(!saved && p.images){
+        delete p.images;
+        saved = persistSends();
+      }
+      if(!saved && !reattached){
         forgetPendingImages(p);
         controlUI.pending.delete(key);
         controlUI.errors.set(key, '浏览器无法保存发送记录。请允许此站点使用本地存储后再发送。');
@@ -1201,17 +1232,36 @@ async function submitPending(p, firstAttempt = false){
     }
     if(!controlUI.csrf) await loadControl();
     if(!controlUI.csrf) throw new Error('网关未连接');
-    const images = p.hasImages ? await pendingImageStore('readonly', store=>store.get(p.id)) : p.images || [];
+    let images = p.imagePayload || p.images;
+    if(p.hasImages && !images){
+      images = await pendingImageStore('readonly', store=>store.get(p.id)).catch(()=>undefined);
+    }
     if(p.status !== 'unconfirmed') return;
-    if(!images) throw new Error('未找到待确认请求的图片，请先检查会话记录。');
+    if(p.hasImages && !images){
+      try{
+        const {job} = await controlFetch('/api/jobs?id=' + encodeURIComponent(p.id));
+        applySendJob(p, job);
+      }catch(e){
+        if(e.code !== 'job_not_found') throw e;
+        p.needsImages = true;
+        p.message = '浏览器清除了待发送图片。请重新选择原图片并点发送，继续使用原请求编号。';
+        persistSends();
+      }
+      return;
+    }
     const d = await controlFetch('/api/send', {
       method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
-      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, images, model:p.model || undefined }),
-    });
+      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, images:images || [], model:p.model || undefined }),
+    }, images?.length ? 120000 : undefined);
     applySendJob(p, d.job);
     if(controlUI.selected === key) pollSession();
   }catch(e){
-    if(e.status === 403 || e.status === 401){
+    if(e.code === 'request_conflict'){
+      try{
+        const {job} = await controlFetch('/api/jobs?id=' + encodeURIComponent(p.id));
+        applySendJob(p, job);
+      }catch(e){ p.message = '此请求编号已有记录，请点“确认发送结果”。'; }
+    }else if(e.code === 'invalid_csrf' || e.status === 401){
       // A previous attempt may have run before the gateway restarted and rotated CSRF.
       p.status = 'unconfirmed';
       p.message = '连接校验已更新。正在刷新，请再确认发送结果；会保留原请求编号。';
@@ -1267,13 +1317,21 @@ async function send(){
   if((!text && !selectedImages.length) || !a?.source || a.source !== state.realSessionSource || !state.realSessionId || controlUI.loading) return;
   if(selectedImages.length && a.source !== 'dsh'){ toast('图片仅支持 DeepSeek'); return; }
   const key = sendKey(a.source, state.realSessionId);
-  if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
+  const pending = controlUI.pending.get(key);
+  const reattach = pending?.status === 'unconfirmed' && pending.needsImages && selectedImages.length;
+  if(controlUI.submitting.has(key) || (SEND_ACTIVE.has(pending?.status) && !reattach)) return;
   if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
   if(selectedImages.length && !controlUI.sources[a.source].runtime?.imageInput) return;
+  if(reattach){
+    pending.preview = selectedImages;
+    pending.message = '正在提交图片…';
+    await submitPending(pending, true);
+    return;
+  }
   const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
     model:$('#chatModel').value || undefined,
     hasImages:selectedImages.length > 0, preview:selectedImages,
-    status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
+    status:'unconfirmed', message:selectedImages.length ? '正在提交图片…' : '正在提交…', createdAt:Date.now() };
   controlUI.pending.set(key, p);
   await submitPending(p, true);
 }
@@ -1469,8 +1527,9 @@ function updateSendState(){
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
   const canAttach = a?.source === 'dsh' && capability?.runtime?.imageInput;
   const hasImages = selectedImages.length > 0;
-  const ready = available && !busy && (hasImages ? canAttach : !!input.value.trim());
-  $('#btnAttach').disabled = !available || busy || !canAttach;
+  const canReattach = available && canAttach && p?.status === 'unconfirmed' && p.needsImages && !controlUI.submitting.has(key);
+  const ready = available && (canReattach ? hasImages : !busy && (hasImages ? canAttach : !!input.value.trim()));
+  $('#btnAttach').disabled = !available || !canAttach || (busy && !canReattach);
   const model = $('#chatModel');
   const canChooseModel = selected && ['codex', 'dsh'].includes(a.source);
   $('#chatModelRow').hidden = !canChooseModel;
@@ -1489,6 +1548,7 @@ function updateSendState(){
   if(selected && capability?.available && !p) message += ' 同一会话可连续对话。';
   if(p) message = p.message || message;
   if(p?.status === 'failed' && p.message) message = `上次发送失败。${p.message}`;
+  if(available && hasImages && !canAttach && !busy) message = '当前连接不支持图片，请移除图片后发送文字。';
   if(controlUI.errors.has(key)) message = controlUI.errors.get(key);
   $('#sendStatusText').textContent = message;
   $('#sendStatus').classList.toggle('is-error', (!controlUI.submitting.has(key) && ['failed','unknown','unconfirmed'].includes(p?.status)) || controlUI.errors.has(key));

@@ -22,7 +22,6 @@ import '../../state/sessions_state.dart' show currentSessionProvider;
 import '../bots/bot_alerts.dart';
 import '../chat/chat_screen.dart';
 import '../chat/composer_toast.dart' show composerToastGap;
-import '../dashboard/agent_phone_dashboard_page.dart';
 import '../engine/engine_screen.dart';
 import '../engine/reset_outcome.dart';
 import '../features/all_features_page.dart';
@@ -237,7 +236,6 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
       DrawerDestination.settings => const SettingsScreen(),
       DrawerDestination.settingsSearch => const SettingsSearchPage(),
       DrawerDestination.features => const AllFeaturesPage(),
-      DrawerDestination.dashboard => const AgentPhoneDashboardPage(),
     };
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
     // Close once the new page covers us, so "back" lands on the chat.

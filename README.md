@@ -1,18 +1,20 @@
 # agent-phone
 
-面向手机的多智能体工作台，通过 Mac 本地网关读取 WorkBuddy、Codex 和 DeepSeek Harness 的用量与会话记录。
+Agent Phone v2 用于在手机上接续 DeepSeek Harness 对话。v1 网页可通过 Mac 本地网关读取 WorkBuddy、Codex 和 DeepSeek Harness 的用量与会话记录。
 
 ## v2 手机端源码
 
 v2 的 Android 工程位于仓库根目录的 [`mobile/`](mobile/)。其中 [`app/`](mobile/app/) 是 Flutter 界面和 Android 宿主，[`packages/`](mobile/packages/) 是 DSH 客户端与远程连接层，[`runtime/`](mobile/runtime/) 是手机本机引擎的构建源码。Android 打包入口为 [`mobile/tooling/build-apk.sh`](mobile/tooling/build-apk.sh)。
 
-手机端是 [DSH Go](https://github.com/ccch1mneyyy/dsh-go)（作者 ccch1mneyyy）的非官方衍生版本，基于 `e326a171f46b`，按 [AGPL-3.0](mobile/LICENSE) 发布；第三方组件以[各自声明](mobile/THIRD_PARTY_NOTICES.md)为准。2026-11-18 的改动包括接入 Mac 工作台、更换品牌图形、移除上游受限素材与手机操控功能。测试截图基线仅供本地使用，不随源码提交。已定档的网页版可通过 `v1` 标签查看。
+手机端是 [DSH Go](https://github.com/ccch1mneyyy/dsh-go)（作者 ccch1mneyyy）的非官方衍生版本，基于 `e326a171f46b`，按 [AGPL-3.0](mobile/LICENSE) 发布；第三方组件以[各自声明](mobile/THIRD_PARTY_NOTICES.md)为准。本分支更换了品牌图形，移除了上游受限素材与手机操控功能。测试截图基线仅供本地使用。已定档的网页版可通过 `v1` 标签查看。
 
 Agent Phone 不预装上游鲸鱼。你可在手机「设置 → 宠物 → 导入」选择自己的主题 ZIP。单张原创透明 PNG 也可以按[最小宠物包示例](mobile/docs/pets/README.md#2-最小可用包可直接照抄)打成只含待机状态的包。
 
-安卓 App 左侧抽屉的「Mac 工作台」可通过已配对的 DSH Remote 主机读取看板。Mac 上启动本仓库网关和桌面桥插件，并在 `ds-harness-remote` 的 `loopback.ports` 中加入 `5174`。该端口仅监听 Mac 回环地址，提供用量汇总和 DSH 会话索引。已有的 WireGuard 看板地址也可继续使用。
+在手机的「设置 → 远程主机」配对 Mac 上的 DSH Remote，然后切换到该主机并打开已有对话。会话列表、消息、审批、停止任务和单会话 Token 用量都通过 DSH Remote。点聊天顶部的标题，在「对话详情 → 上下文」查看主机报告的 Token 数。Mac 需要保持在线，桌面 Host 和 DSH Remote 服务需要可用。[DSH Remote 配对指南](mobile/docs/guide/zh/03-engine-hosts.md#dsh-remote)
 
-## 使用方案
+如果已改用 v2，可以停用 v1 网页的 Mac 后台进程、SSH 隧道和旧服务器上的 WireGuard 服务。[停用步骤](docs/PRIVATE-NETWORK.md#停用)
+
+## v1 网页使用方案
 
 ### 方案一 · 同一局域网直连
 

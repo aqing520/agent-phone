@@ -110,7 +110,6 @@ void main() {
       DrawerDestination.remote,
       DrawerDestination.settingsSearch,
       DrawerDestination.features,
-      DrawerDestination.dashboard,
     ]);
   });
 
@@ -217,7 +216,7 @@ void main() {
 
     test('an id nothing answers to is dropped, a repeat too, the order kept', () async {
       SharedPreferences.setMockInitialValues({
-        QuickPanelController.itemsKey: ['features', 'gone', 'web', 'features', 'remote', ''],
+        QuickPanelController.itemsKey: ['features', 'dashboard', 'web', 'features', 'remote', ''],
       });
       expect((await load(container())).items, [DrawerDestination.features, DrawerDestination.remote]);
     });
@@ -250,7 +249,6 @@ void main() {
       'settings',
       'settingsSearch',
       'features',
-      'dashboard',
     ]);
   });
 }

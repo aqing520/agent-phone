@@ -172,56 +172,6 @@ class RemoteHostSession {
 
   bool get isClosed => rpc.isClosed;
 
-  /// Read a JSON response from a loopback port authorized by the Host.
-  Future<Map<String, dynamic>> readLoopbackJson(int port, String path) async {
-    final id = uuidV7();
-    try {
-      final opened = asMap(
-        await rpc.call('loopback.call', {
-          'op': 'http.open',
-          'id': id,
-          'port': port,
-          'path': path,
-          'headers': <Object?>[],
-          'method': 'GET',
-        }, timeout: const Duration(seconds: 12)),
-      );
-      if (opened?['status'] != 200) {
-        throw FormatException('Loopback read returned HTTP ${opened?['status']}');
-      }
-      final bytes = BytesBuilder(copy: false);
-      while (true) {
-        final chunk = asMap(
-          await rpc.call('loopback.call', {
-            'op': 'http.read',
-            'id': id,
-          }, timeout: const Duration(seconds: 8)),
-        );
-        final encoded = chunk?['data'];
-        final done = chunk?['done'];
-        if (encoded is! String || done is! bool || (encoded.isEmpty && !done)) {
-          throw const FormatException('Invalid loopback response');
-        }
-        bytes.add(base64Decode(encoded));
-        if (bytes.length > 4 * 1024 * 1024) {
-          throw const FormatException('Loopback response exceeds 4 MiB');
-        }
-        if (done) return jsonDecode(utf8.decode(bytes.takeBytes())) as Map<String, dynamic>;
-      }
-    } finally {
-      if (!rpc.isClosed) {
-        unawaited(
-          rpc
-              .call('loopback.call', {
-                'op': 'close',
-                'id': id,
-              }, timeout: const Duration(seconds: 2))
-              .then<void>((_) {}, onError: (Object _, StackTrace _) {}),
-        );
-      }
-    }
-  }
-
   Future<void> close() => rpc.close();
 }
 

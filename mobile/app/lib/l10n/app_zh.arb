@@ -980,35 +980,6 @@
     }
   },
   "activityToolListSeparator": "、",
-  "agentPhoneDashboard": "Mac 工作台",
-  "agentPhoneRefresh": "刷新",
-  "agentPhoneGateway": "看板地址",
-  "agentPhoneBindHost": "绑定这台 Mac 的 DSH 主机",
-  "agentPhoneBindHint": "选中对应的远程主机后，即可从看板打开对话",
-  "agentPhoneBoundHost": "已绑定的 DSH 主机 · 点击更换",
-  "agentPhoneActiveHost": "当前 DSH Remote 主机",
-  "agentPhoneBindConfirm": "将此看板的会话关联到「{host}」？",
-  "@agentPhoneBindConfirm": {
-    "placeholders": {
-      "host": {
-        "type": "String"
-      }
-    }
-  },
-  "agentPhoneBindAction": "绑定",
-  "agentPhoneLoadFailed": "无法读取 Mac 看板",
-  "agentPhoneNetworkHint": "检查 Mac 上的 DSH Remote 和看板网关是否在线，或使用 WireGuard 连接原看板地址。",
-  "agentPhoneUsage": "Token 用量",
-  "agentPhoneUsageHint": "过去一年 · 汇总看板上的全部来源",
-  "agentPhoneToday": "今日用量",
-  "agentPhoneTotal": "累计用量",
-  "agentPhoneDaily": "按天",
-  "agentPhoneWeekly": "按周",
-  "agentPhoneProjects": "最近的 DeepSeek 项目",
-  "agentPhoneNoProjects": "暂时没有 DeepSeek 会话",
-  "agentPhoneInvalidGateway": "请填写 HTTPS 地址或现有 WireGuard 看板地址。",
-  "agentPhoneHostUnavailable": "无法连接已绑定的主机，请在远程主机页检查连接。",
-  "agentPhoneSessionMissing": "这台主机里没有这段对话，请确认绑定的是对应的 Mac。",
   "androidShellTitle": "Android Shell",
   "androidShellEntryHint": "独立的系统命令通道，默认关闭",
   "androidShellSubtitle": "通过 Shizuku 或自连 ADB 在这台手机上执行 Android 系统命令，不是 Ubuntu 里的 bash。",

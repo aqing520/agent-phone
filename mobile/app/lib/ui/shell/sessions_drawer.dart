@@ -179,11 +179,6 @@ class SessionsDrawer extends ConsumerWidget {
         onDetails: () => onOpen(DrawerDestination.engine),
       ),
       SessionSearchBar(onClose: onClose),
-      TextButton.icon(
-        onPressed: () => onOpen(DrawerDestination.dashboard),
-        icon: const Icon(Icons.dashboard_outlined, size: 20),
-        label: Text(context.l10n.agentPhoneDashboard),
-      ),
       // The workspace switcher (once the host's workspace list has
       // arrived) and the list's options, then the status filters.
       SmoothSize(

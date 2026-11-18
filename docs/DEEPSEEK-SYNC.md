@@ -1,5 +1,7 @@
 # DeepSeek desktop bridge deployment
 
+This bridge supports native archive, restore, and workspace attachment for the v1 web dashboard. The v2 app connects through DSH Remote.
+
 Verified on November 18, 2026 with DeepSeek Harness 0.2.2-rc.3. An isolated desktop profile verified native archive, restore, and workspace attachment. A real model identified the color of a test PNG, and the phone history displayed the image saved by Harness. The user then confirmed image sending and desktop archive sync in the everyday profile from a physical phone.
 
 ## Install in the desktop profile

@@ -1,6 +1,6 @@
 # 私人远程访问
 
-使用 WireGuard 和 SSH 反向隧道，不对公网开放看板 HTTP 端口。
+v1 网页使用 WireGuard 和 SSH 反向隧道，不对公网开放看板 HTTP 端口。v2 手机 App 使用 [DSH Remote](../mobile/docs/guide/zh/03-engine-hosts.md#dsh-remote)。
 
 ```text
 手机 WireGuard（10.77.73.2）
@@ -41,8 +41,32 @@ python3 tools/install_mac_relay.py <服务器IP> --key ~/.ssh/id_ed25519_agent_p
 
 ## 停用
 
-Mac 使用 `launchctl bootout gui/$(id -u)/local.agent-phone.tunnel` 停止隧道，网关同理。
-服务器使用 `systemctl disable --now wg-quick@apwg0` 停用私人网络。
+确认 v2 已能打开 Mac 上的会话并查看 Token 用量，等 v1 网页提交的任务结束。只用 v2 时，可以停掉 Mac 上已安装的 v1 LaunchAgent，并禁止它们在下次登录时启动：
+
+```sh
+for job in tunnel gateway codex dsh; do
+  service="gui/$(id -u)/local.agent-phone.$job"
+  plist="$HOME/Library/LaunchAgents/local.agent-phone.$job.plist"
+  if [ -f "$plist" ]; then
+    launchctl disable "$service"
+    if launchctl print "$service" >/dev/null 2>&1; then
+      launchctl bootout "$service"
+    fi
+  fi
+done
+```
+
+恢复网关时运行下面两条命令。要恢复其他服务，把两处 `gateway` 换成对应的服务名。
+
+```sh
+launchctl enable "gui/$(id -u)/local.agent-phone.gateway"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.agent-phone.gateway.plist"
+```
+
+在 DeepSeek Harness 桌面端的「插件 → 已安装」关闭 `agent-phone-desktop-bridge`，即可停止旧版 `5174` 看板监听。保留 DS Harness Remote 插件及其服务端。
+
+在旧服务器上运行 `systemctl disable --now wg-quick@apwg0`，停止 v1 的 WireGuard 并取消它的开机启动。
+
 撤销丢失手机的访问权限需要从服务器 WireGuard 配置删除对应 peer，并同步运行时配置。
 
 网关没有应用层登录，部署时必须保持回环监听和私人地址入口。静态托管只允许前端资源，不提供源码、Git 数据或目录列表。

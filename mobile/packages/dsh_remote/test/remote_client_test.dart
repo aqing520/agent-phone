@@ -240,6 +240,48 @@ void main() {
       await _eventually(() => host.rpcMethods.last == 'harness.remote.stream.close');
     });
 
+    test('loads session token totals and streams updates directly from the host', () async {
+      const sessionId = 'session-1';
+      const initialUsage = {'uncachedInputTokens': 120, 'outputTokens': 15};
+      const updatedUsage = {'uncachedInputTokens': 140, 'outputTokens': 25};
+      const projections = {
+        'asOfSeq': 10,
+        'values': {'tokenUsage': initialUsage},
+      };
+      host.handlers['session/projections'] = (args) {
+        expect(args, {
+          'request': {'sessionId': sessionId},
+        });
+        return {'ok': true, 'value': projections};
+      };
+      host.onOpen = (stream) {
+        expect(stream.endpoint, 'session/control');
+        stream.push({
+          'type': 'baseline',
+          'value': {
+            'projections': {sessionId: projections},
+          },
+        });
+        stream.push({
+          'type': 'projection',
+          'sessionId': sessionId,
+          'seq': 11,
+          'changes': [
+            {'key': 'tokenUsage', 'val': updatedUsage},
+          ],
+        });
+      };
+      final client = await account.connectHost(await signInAndFindHost(), muxOptions: fastMux);
+      expect((await client.projections(sessionId))?.tokenUsage, initialUsage);
+
+      final frames = await client.watchSessionControl().take(2).timeout(const Duration(seconds: 5)).toList();
+      final baseline = frames.first as SessionControlBaseline;
+      expect(baseline.projections[sessionId]?.tokenUsage, initialUsage);
+      final update = frames.last as SessionControlProjection;
+      expect((update.sessionId, update.key, update.seq), (sessionId, 'tokenUsage', 11));
+      expect(update.value, updatedUsage);
+    });
+
     test(r'approvals arrive on $events and are answered with the tunnel clientId', () async {
       final target = await signInAndFindHost();
       Map<String, Object?>? answered;

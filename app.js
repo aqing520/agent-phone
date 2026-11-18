@@ -405,11 +405,12 @@ function renderSessionList(){
     ? available.filter(s=>projectKey(s) === group.key)
     : available;
   const nativeArchive = state.realSessions.some(s=>s.source === 'dsh' && s.archiveScope === 'desktop');
+  $('#archiveFilter').textContent = archiveView ? '返回未归档会话' : nativeArchive ? '查看已归档会话' : '查看手机归档';
   $('#archiveScopeNote').textContent = nativeArchive ? '归档与 DeepSeek 桌面共用原生状态。' : '桌面桥接未连接，目前仅保存手机归档。';
   $('#sessTitle').textContent = archiveView ? (nativeArchive ? 'DeepSeek 已归档' : '手机归档（不同步桌面）') : (group?.name || '会话历史');
   if(!matches.length){
     $('#sessMeta').textContent = '';
-    list.innerHTML = `<div class="sess__empty">未连接到本机网关<br>暂无真实会话记录</div>`;
+    list.innerHTML = `<div class="sess__empty">${archiveView ? '暂无归档会话' : '暂无会话记录'}</div>`;
     return;
   }
   $('#sessMeta').textContent = matches.length + ' 条';
@@ -448,6 +449,20 @@ function renderSessionList(){
       await setArchive(el.dataset.archive, !item.archived);
     });
   });
+}
+
+let refreshingArchiveList = false;
+async function refreshOpenArchiveList(){
+  if(document.hidden || refreshingArchiveList || !$('#sessMask').classList.contains('is-open')) return;
+  const archiveState = items=>JSON.stringify(items.filter(s=>s.source === 'dsh').map(s=>[s.id, s.archived, s.archiveScope]));
+  const previous = archiveState(state.realSessions);
+  refreshingArchiveList = true;
+  try{
+    if(await loadSessions() && previous !== archiveState(state.realSessions)){
+      renderSessionList();
+      renderProjects();
+    }
+  }finally{ refreshingArchiveList = false; }
 }
 
 async function openSessSheet(project = null){
@@ -809,7 +824,7 @@ function addMsg(role, text, agent, isNew=true, showWho=true, images=[]){
       if(role === 'me'){
         wrap.querySelector('.bubble').textContent = text;
       }else{
-        wrap.querySelector('.body').innerHTML = md(text);
+        wrap.querySelector('.body').innerHTML = imageMarkup(images) + md(text);
       }
       btn.remove();
     });
@@ -865,6 +880,14 @@ function replaceLastMessage(m, agent){
   if(nearBottom(box)) scrollBottom(true);
 }
 
+function sameMessage(a, b){
+  if(!a || !b || a.role !== b.role || a.text !== b.text) return false;
+  const oldImages = a.images || [];
+  const newImages = b.images || [];
+  return oldImages.length === newImages.length && oldImages.every((image, i)=>
+    image.mimeType === newImages[i].mimeType && image.data === newImages[i].data);
+}
+
 async function pollSession(){
   if(document.hidden) return;
   if(!$('#viewChat').classList.contains('is-active') || !state.realSessionId) return;
@@ -892,7 +915,7 @@ async function pollSession(){
       // 数量没变，但最后一条内容变了 = 还在流式生成
       const oldLast = slot.messages[rendered.count - 1];
       const newLast = msgs[msgs.length - 1];
-      if(oldLast && newLast && oldLast.text !== newLast.text
+      if(oldLast && newLast && !sameMessage(oldLast, newLast)
          && !$('#messages').classList.contains('is-empty')){
         slot.messages = msgs;
         replaceLastMessage(newLast, agent);
@@ -905,7 +928,7 @@ async function pollSession(){
       let same = true;
       for(let i = 0; i < rendered.count; i++){
         const o = slot.messages[i], n = msgs[i];
-        if(!o || o.text !== n.text || o.role !== n.role){ same = false; break; }
+        if(!sameMessage(o, n)){ same = false; break; }
       }
       if(same){
         slot.messages = msgs;
@@ -978,7 +1001,7 @@ const sendKey = (source, id) => `${source}:${id}`;
 const SEND_ACTIVE = new Set(['queued', 'starting', 'running', 'unconfirmed', 'unknown']);
 try{
   const saved = JSON.parse(localStorage.getItem(SEND_STORAGE) || '[]');
-  if(Array.isArray(saved)) saved.slice(-20).forEach(p=>{
+  if(Array.isArray(saved)) saved.forEach(p=>{
     if(p && /^[0-9a-f-]{36}$/.test(p.id) && /^[0-9a-f-]{36}$/.test(p.session)
        && ['dsh','codex'].includes(p.source) && typeof p.text === 'string' && p.text.length <= 12000){
       controlUI.pending.set(sendKey(p.source, p.session), p);
@@ -991,9 +1014,36 @@ function persistSends(){
     const values = [...controlUI.pending.values()];
     const active = values.filter(p=>SEND_ACTIVE.has(p.status));
     const recent = values.filter(p=>!SEND_ACTIVE.has(p.status)).sort((a,b)=>a.createdAt-b.createdAt).slice(-20);
-    localStorage.setItem(SEND_STORAGE, JSON.stringify([...recent, ...active]));
+    const records = [...recent, ...active].map(({ preview, ...record })=>record);
+    localStorage.setItem(SEND_STORAGE, JSON.stringify(records));
     return true;
   }catch(e){ return false; }
+}
+
+// Image batches can exceed localStorage's quota. Keep their bytes in IndexedDB
+// until the gateway confirms the original request ID.
+async function pendingImageStore(mode, operation){
+  const db = await new Promise((resolve, reject)=>{
+    const open = indexedDB.open('agent-phone.pendingImages', 1);
+    open.onupgradeneeded = ()=>open.result.createObjectStore('requests');
+    open.onsuccess = ()=>resolve(open.result);
+    open.onerror = ()=>reject(open.error);
+  });
+  try{
+    return await new Promise((resolve, reject)=>{
+      const tx = db.transaction('requests', mode);
+      const request = operation(tx.objectStore('requests'));
+      tx.oncomplete = ()=>resolve(request.result);
+      tx.onabort = ()=>reject(tx.error);
+    });
+  }finally{ db.close(); }
+}
+
+function forgetPendingImages(p){
+  if(p.hasImages) pendingImageStore('readwrite', store=>store.delete(p.id)).catch(()=>{});
+  delete p.hasImages;
+  delete p.images; // Pending requests from older builds stored their images inline.
+  delete p.preview;
 }
 
 function rememberDraft(){
@@ -1109,6 +1159,11 @@ function applySendJob(p, job){
       $('#input').value = '';
       controlUI.drafts.set(key, '');
     }
+    if(job.status !== 'failed' && selectedImages === p.preview){
+      selectedImages = [];
+      renderImagePreview();
+    }
+    forgetPendingImages(p);
   }
   Object.assign(p, { status:job.status, message:job.message, updatedAt:job.updatedAt });
   if(job.status === 'failed' && !controlUI.drafts.get(key)){
@@ -1123,24 +1178,36 @@ function applySendJob(p, job){
   }
 }
 
-async function submitPending(p){
+async function submitPending(p, firstAttempt = false){
   const key = sendKey(p.source, p.session);
   if(controlUI.submitting.has(key)) return;
   controlUI.submitting.add(key);
   controlUI.errors.delete(key);
   updateSendState();
   try{
+    if(firstAttempt){
+      try{
+        if(p.hasImages){
+          const images = p.preview.map(({mimeType, data})=>({mimeType, data}));
+          await pendingImageStore('readwrite', store=>store.put(images, p.id));
+        }
+        if(!persistSends()) throw new Error('Pending send could not be saved');
+      }catch(e){
+        forgetPendingImages(p);
+        controlUI.pending.delete(key);
+        controlUI.errors.set(key, '浏览器无法保存发送记录。请允许此站点使用本地存储后再发送。');
+        return;
+      }
+    }
     if(!controlUI.csrf) await loadControl();
     if(!controlUI.csrf) throw new Error('网关未连接');
+    const images = p.hasImages ? await pendingImageStore('readonly', store=>store.get(p.id)) : p.images || [];
+    if(p.status !== 'unconfirmed') return;
+    if(!images) throw new Error('未找到待确认请求的图片，请先检查会话记录。');
     const d = await controlFetch('/api/send', {
       method:'POST', headers:{ 'Content-Type':'application/json', 'X-Agent-Phone-CSRF':controlUI.csrf },
-      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, images:p.images || [], model:p.model || undefined }),
+      body:JSON.stringify({ requestId:p.id, source:p.source, session:p.session, text:p.text, images, model:p.model || undefined }),
     });
-    // Only clear the exact submitted draft, never text typed while waiting or another chat.
-    if(controlUI.selected === key && $('#input').value.trim() === p.text){
-      $('#input').value = '';
-      controlUI.drafts.set(key, '');
-    }
     applySendJob(p, d.job);
     if(controlUI.selected === key) pollSession();
   }catch(e){
@@ -1151,6 +1218,7 @@ async function submitPending(p){
       controlUI.csrf = null;
       await loadControl();
     }else if(e.status >= 400 && e.status < 500 && e.status !== 408){
+      forgetPendingImages(p);
       controlUI.pending.delete(key);
       controlUI.errors.set(key, e.message);
     }else{
@@ -1170,18 +1238,27 @@ function renderImagePreview(){
   const box = $('#imagePreview'); if(!box) return;
   box.hidden = !selectedImages.length;
   box.innerHTML = selectedImages.map((x,i)=>`<span class="image-preview__item"><img src="${x.url}" alt="待发送图片"><button type="button" data-remove-image="${i}">×</button></span>`).join('');
-  $$('[data-remove-image]', box).forEach(b=>b.addEventListener('click',()=>{ selectedImages.splice(+b.dataset.removeImage,1); renderImagePreview(); updateSendState(); }));
+  $$('[data-remove-image]', box).forEach(b=>b.addEventListener('click',()=>{
+    selectedImages = selectedImages.filter((_, i)=>i !== Number(b.dataset.removeImage));
+    renderImagePreview();
+    updateSendState();
+  }));
 }
 async function readImages(files){
   const key = controlUI.selected;
+  const selection = selectedImages;
+  const newImages = [];
   const allowed = new Set(['image/png','image/jpeg','image/webp','image/gif']);
   for(const file of files){
     if(!allowed.has(file.type) || file.size > 3 * 1024 * 1024){ toast('只支持 3 MB 内的 PNG/JPEG/WebP/GIF'); continue; }
     const data = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(String(r.result).split(',')[1]); r.onerror=reject; r.readAsDataURL(file); });
-    if(key !== controlUI.selected) return;
-    selectedImages.push({mimeType:file.type, data, url:`data:${file.type};base64,${data}`});
+    if(key !== controlUI.selected || selection !== selectedImages) return;
+    newImages.push({mimeType:file.type, data, url:`data:${file.type};base64,${data}`});
+    if(newImages.length === 4) break;
   }
-  selectedImages = selectedImages.slice(-4); renderImagePreview(); updateSendState();
+  selectedImages = [...selection, ...newImages].slice(-4);
+  renderImagePreview();
+  updateSendState();
 }
 
 async function send(){
@@ -1192,21 +1269,13 @@ async function send(){
   const key = sendKey(a.source, state.realSessionId);
   if(controlUI.submitting.has(key) || SEND_ACTIVE.has(controlUI.pending.get(key)?.status)) return;
   if(!controlUI.sources?.[a.source]?.available || !controlUI.csrf) return;
+  if(selectedImages.length && !controlUI.sources[a.source].runtime?.imageInput) return;
   const p = { id:newRequestId(), source:a.source, session:state.realSessionId, text,
     model:$('#chatModel').value || undefined,
-    images:selectedImages.map(({mimeType,data})=>({mimeType,data})),
+    hasImages:selectedImages.length > 0, preview:selectedImages,
     status:'unconfirmed', message:'正在提交…', createdAt:Date.now() };
   controlUI.pending.set(key, p);
-  if(!persistSends()){
-    controlUI.pending.delete(key);
-    controlUI.errors.set(key, '浏览器无法保存发送记录。请允许此站点使用本地存储后再发送。');
-    updateSendState();
-    return;
-  }
-  await submitPending(p);
-  if(p.status === 'completed' || p.status === 'running' || p.status === 'queued'){
-    selectedImages = []; renderImagePreview();
-  }
+  await submitPending(p, true);
 }
 
 async function pollSendJobs(){
@@ -1398,8 +1467,10 @@ function updateSendState(){
   const p = controlUI.pending.get(key);
   const busy = controlUI.submitting.has(key) || SEND_ACTIVE.has(p?.status);
   const available = selected && capability?.available && !controlUI.loading && !!controlUI.csrf;
-  const ready = available && !busy && (input.value.trim().length > 0 || (a.source === 'dsh' && selectedImages.length > 0));
-  $('#btnAttach').disabled = !available || busy || a?.source !== 'dsh' || !capability?.runtime?.imageInput;
+  const canAttach = a?.source === 'dsh' && capability?.runtime?.imageInput;
+  const hasImages = selectedImages.length > 0;
+  const ready = available && !busy && (hasImages ? canAttach : !!input.value.trim());
+  $('#btnAttach').disabled = !available || busy || !canAttach;
   const model = $('#chatModel');
   const canChooseModel = selected && ['codex', 'dsh'].includes(a.source);
   $('#chatModelRow').hidden = !canChooseModel;
@@ -1462,7 +1533,6 @@ function bind(){
 
   $('#archiveFilter').addEventListener('click', ()=>{
     archiveView = !archiveView;
-    $('#archiveFilter').textContent = archiveView ? '返回未归档会话' : '查看手机归档';
     renderSessionList();
   });
   $('#sessionBar').addEventListener('click', ()=>openSessSheet());
@@ -1511,6 +1581,7 @@ function bind(){
   document.addEventListener('visibilitychange', ()=>{
     if(!document.hidden){
       loadControl(); pollSendJobs();
+      refreshOpenArchiveList();
       if($('#viewChat').classList.contains('is-active')) pollSession();
     }
   });
@@ -1528,6 +1599,7 @@ loadControl();
 pollSendJobs();
 setInterval(pollSendJobs, 2000);
 setInterval(pollNewChat, 1500);
+setInterval(refreshOpenArchiveList, 5000);
 setInterval(()=>{ if(!document.hidden) loadControl(); }, 15000);
 
 // 接入真实用量与会话列表，之后每 30 秒轮询

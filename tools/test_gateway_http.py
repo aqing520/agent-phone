@@ -74,20 +74,24 @@ class GatewayHTTPTests(unittest.TestCase):
 
     def test_send_rejects_forms_bad_json_and_oversized_body(self):
         with patch.object(server, "get_control_service") as service:
-            for body, headers, expected in (
-                ('{}',self.send_headers(**{'Content-Type':'text/plain'}),415),
-                ('not-json',self.send_headers(),400),
-                ('x'*65537,self.send_headers(),413),
+            for path, body, headers, expected in (
+                ('/api/send', '{}', self.send_headers(**{'Content-Type':'text/plain'}), 415),
+                ('/api/send', 'not-json', self.send_headers(), 400),
+                ('/api/send', '', self.send_headers(**{'Content-Length':str(17 * 1024 * 1024 + 1)}), 413),
+                ('/api/dsh/archive', '', self.send_headers(**{'Content-Length':'65537'}), 413),
             ):
-                self.assertEqual(self.request('/api/send','POST',body,headers)[0],expected)
+                self.assertEqual(self.request(path, 'POST', body, headers)[0], expected)
             service.assert_not_called()
 
     def test_send_and_job_status_routes(self):
         with patch.object(server, 'get_control_service') as service:
             service.return_value.submit.return_value = {'id':'fixture','status':'queued'}
-            status, _, body = self.request('/api/send','POST','{}',self.send_headers())
+            # The image route must allow payloads above the old 64 KiB limit.
+            payload = json.dumps({'images': [{'data': 'x' * 65536}]})
+            status, _, body = self.request('/api/send', 'POST', payload, self.send_headers())
             self.assertEqual(status,202)
             self.assertEqual(json.loads(body)['job']['status'],'queued')
+            self.assertEqual(service.return_value.submit.call_args.args[0], json.loads(payload))
             service.return_value.get.return_value = {'id':'fixture','status':'completed'}
             self.assertEqual(json.loads(self.request('/api/jobs?id=fixture')[2])['job']['status'],'completed')
 

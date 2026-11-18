@@ -28,29 +28,28 @@
 - 已明确标注：这是手机平台归档，不代表 DeepSeek 桌面已同步。
 - 已添加隔离测试 `python3 tools/test_dsh_archive.py`。
 
-### 第三批：DeepSeek 图片链路（已实现，待真实兼容模型验收）
+### 第三批：DeepSeek 图片链路（真实模型验收通过，待部署）
 
 - 手机选择 PNG/JPEG/WebP/GIF，限制单张 3 MB、最多 4 张，支持预览和移除。
 - 图片随 DeepSeek 任务持久保存，幂等指纹包含图片内容，网关限制格式、真实文件头和 base64。
 - ACP `session/prompt` 使用官方 `image` content block；模型拒绝图片时返回明确提示。
 - 历史解析支持内联图片和 DeepSeek content-addressed attachment 引用，校验 SHA-256 后才展示。
 - 新增 `tools/test_dsh_images.py`，不调用模型。
-- 网页仅在 DeepSeek 控制器报告 `runtime.imageInput=true` 时启用图片按钮，避免旧控制器静默丢弃附件。
-- 当前代码尚未重启在线 DeepSeek 控制器；它可能正在执行本次手机任务，不能在任务中强制重启。真实端到端验收与部署仍待完成。
+- 网页将待确认图片存入 IndexedDB。浏览器断线后可用原请求编号重试。在线控制器根据 ACP 握手结果报告图片能力。
+- 2026-11-18 用隔离控制器、官方 ACP 和真实模型识别测试图片颜色，网页历史成功显示 Harness 保存的图片。移动尺寸 Chromium 验证了超过 localStorage 容量的图片请求可在刷新后重试。
 
-### 第四批：原生同步桥接（代码及隔离测试完成，安装待授权）
+### 第四批：原生同步桥接（隔离桌面 Host 端到端通过，待部署）
 
 - 在桌面 Host 内调用 workspaceRegistry，不建立第二个 workspace 数据写入者。
 - 私有 socket 仅提供状态、归档、恢复、登记到已有 workspace。
 - 网关连通后读取桌面原生归档集；未连通时明确标注手机独立归档。
-- 插件安装被沙箱拒绝，扩大权限批准已取消；没有绕过限制。
-- 安装步骤及尚需真实验收的内容见 [DEEPSEEK-SYNC.md](DEEPSEEK-SYNC.md)。
+- 插件由 Harness 的 bundle 加载器注册，在隔离 Desktop Host 验证了双向归档和恢复，以及手机会话挂接到已有工作区。
+- 日常配置的安装与重启步骤见 [DEEPSEEK-SYNC.md](DEEPSEEK-SYNC.md)。
 
 ### 尚未完成
 
-1. 获得桌面 profile 安装许可、加载插件并验证桌面 workspace/原生归档双向变化。
-2. 使用明确支持图片的 DeepSeek 模型做一次真实端到端验收。
-3. DeepSeek 定向回归：桌面交接、归档恢复、图片失败场景。
+1. 将桥接插件及 ACP 图片模型配置部署到日常环境。
+2. 在实体手机和桌面界面验证交接。
 
 
 ## 验收边界

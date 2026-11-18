@@ -1,36 +1,42 @@
 # DeepSeek desktop bridge deployment
 
-Status: bridge and image code are implemented and isolated tests pass. Desktop installation was attempted through the official plugin manager, but the write to `~/.dsh/profiles/desktop/package.json.lock` was denied and the escalation approval was cancelled. No alternative write was attempted. Native synchronization has **not** been verified or activated in the user's desktop App.
+Verified on November 18, 2026 with DeepSeek Harness 0.2.2-rc.3. An isolated desktop profile loaded the bridge in the bundled Electron Host. The phone gateway and native Host APIs both archived and restored the same session, and a phone-created session appeared in its existing workspace. A real model identified the color of a test PNG, and the phone history displayed the image saved by Harness. These checks used a temporary profile and a loopback gateway. Deployment to the everyday profile is still pending.
 
-## Install (requires permission to change desktop profile)
+## Install in the desktop profile
 
-From this repository:
+After active turns finish, fully quit DeepSeek Harness Desktop. Run this command from the repository root.
 
 ```sh
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop add "link:$(pwd)/tools/dsh-desktop-bridge"
 ```
 
-Then merge the entry from `tools/dsh-desktop-bridge.patch.yml` into the desktop profile's existing `cordis.patch.yml` (do not replace the existing file). The directory field is optional; by default the plugin uses the current user's `~/.config/agent-phone/control`.
+The plugin manager registers the package's bundle and loads its patch automatically. If an older checkout was installed as a plain dependency, remove `agent-phone-desktop-bridge` in the same profile and install it again to register the bundle. The default socket directory is `~/.config/agent-phone/control`.
 
-Restart DeepSeek Desktop only after any active desktop/phone task has finished. The plugin must run inside the desktop Host, not a second ACP process. It opens a 0600 Unix socket, and invokes `workspaceRegistry.archiveSession`, `unarchiveSession`, and existing workspace `attachSession`. It never writes raw workspace or projection documents.
+Open DeepSeek Desktop and check for `~/.config/agent-phone/control/dsh-desktop.sock`. The plugin runs inside the desktop Host and calls `workspaceRegistry.archiveSession`, `unarchiveSession`, and `attachSession` through the native registry. Phone-created sessions attach only to already registered workspaces with the same working directory.
 
 ## Activate image runtime
 
-After active tasks have finished, restart the DeepSeek control service and HTTP gateway. Restarting the control service during a running task can interrupt it; this has deliberately not been performed during the current phone task.
+Declare `input: [text, image]` on the verified image-capable model entry in its provider config. Set that route as the ACP startup model in `~/.config/agent-phone/control/dsh-provider.patch.yml`. Harness checks the startup route during `initialize`, so choosing an image model later in the UI alone cannot enable image input.
 
-The image button stays disabled until the controller advertises `imageInput=true`. Actual ACP image acceptance still depends on initialization capability and the selected provider/model's image modality. An unsupported route must fail explicitly, never silently fall back to text.
+```yaml
+- id: acp
+  config:
+    provider: your-provider-id
+    model: your-image-model-id
+```
+
+Merge the entry into the existing patch list and retain provider settings and credential references. After active tasks finish, restart `local.agent-phone.dsh` and `local.agent-phone.gateway`. In an existing DeepSeek conversation, select an image-capable model and attach up to four PNG, JPEG, WebP, or GIF files of 3 MiB each. An active ACP connection that did not advertise image support disables the attachment button. An unsupported model route returns an error without submitting a text-only turn.
 
 ## Archive state
 
-When the desktop bridge is connected the phone reads and modifies the native archive set. When unavailable the existing phone-only archive remains explicitly labeled. Old phone-only archive records are retained; they are not automatically merged into native archives, since this could unexpectedly archive desktop conversations. Native state is authoritative while the bridge is connected.
+When the desktop bridge is connected the phone reads and modifies the native archive set. The phone refreshes the open session list every five seconds. If the bridge is unavailable, the phone uses its separate archive records. Old phone archive records stay in the phone store. Native state is authoritative while the bridge is connected.
 
-## Verification still required
+## Verification
 
-- Launch plugin in the actual desktop Host and confirm socket availability.
-- Confirm desktop-native archive/restore changes propagate to phone and vice versa.
-- Confirm `attachSession` makes a phone-created session visible in the desktop workspace feed; unknown directories must not create unexpected projects.
-- Verify an actual image with a declared image-capable model, including normalized attachment history.
-- Confirm safe phone/desktop handoff and refresh after external process writes. This implementation does not promise simultaneous writers or perfect live desktop UI refresh.
+- The isolated desktop Host and the phone HTTP API reflected archive and restore in both directions. The native workspace stored the newly attached session and its archive state.
+- The official ACP process sent a synthetic PNG through an image-capable route. The model recognized its color, and the phone history returned the normalized attachment.
+- Mobile-sized Chromium selected two PNGs whose encoded payload exceeded localStorage capacity. After a simulated dropped connection and reload, it kept the same request ID and image payload, then cleared the local copy after acknowledgment.
+- Everyday profile setup, physical-phone testing, and live chat handoff in the desktop renderer remain pending.
 
 ## Isolated checks
 

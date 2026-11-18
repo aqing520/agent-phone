@@ -18,6 +18,8 @@ agent-phone 本地网关
 默认供局域网使用；私人中转部署通过环境变量绑定回环地址。
 无应用层鉴权，请勿直接暴露到公网。
 """
+import base64
+import hashlib
 import json
 import glob
 import os
@@ -450,7 +452,9 @@ def _dsh_meta(cache_file):
 
 
 def dsh_session_dir(sid):
-    hits = glob.glob(os.path.join(DSH, "sessions", "**", sid), recursive=True)
+    if not sid or sid in (".", "..") or os.path.basename(sid) != sid:
+        return None
+    hits = glob.glob(os.path.join(DSH, "sessions", "**", glob.escape(sid)), recursive=True)
     for h in hits:
         if os.path.isdir(h):
             return h
@@ -597,27 +601,31 @@ def parse_dsh_sessions():
 
 def dsh_content_images(content):
     out = []
-    if not isinstance(content, list): return out
+    if not isinstance(content, list):
+        return out
     for block in content:
-        if not isinstance(block, dict) or block.get('type') != 'image': continue
-        mime = block.get('mimeType') or block.get('mediaType')
-        data = block.get('data')
-        ref = block.get('attachment') or {}
-        attachment_id = ref.get('attachmentId', '')
-        if re.fullmatch(r'sha256:[a-f0-9]{64}', attachment_id):
-            digest = attachment_id.split(':')[1]
-            path = os.path.join(DSH, 'attachments', 'v1', 'objects', digest[:2], digest)
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        mime = block.get("mimeType") or block.get("mediaType")
+        data = block.get("data")
+        ref = block.get("attachment")
+        if ref is not None:
+            attachment_id = ref.get("attachmentId") if isinstance(ref, dict) else None
+            if not isinstance(attachment_id, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", attachment_id):
+                continue
+            digest = attachment_id.removeprefix("sha256:")
+            path = os.path.join(DSH, "attachments", "v1", "objects", digest[:2], digest)
             try:
-                import base64, hashlib
-                with open(path, 'rb') as stream:
+                with open(path, "rb") as stream:
                     raw = stream.read(8 * 1024 * 1024 + 1)
-                if len(raw) <= 8 * 1024 * 1024 and hashlib.sha256(raw).hexdigest() == digest:
-                    data = base64.b64encode(raw).decode()
-                    mime = ref.get('mediaType')
             except OSError:
-                pass
-        if mime in ('image/png','image/jpeg','image/webp','image/gif') and isinstance(data, str) and len(data) <= 12_000_000:
-            out.append({'mimeType': mime, 'data': data})
+                continue
+            if len(raw) > 8 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != digest:
+                continue
+            data = base64.b64encode(raw).decode("ascii")
+            mime = ref.get("mediaType")
+        if mime in ("image/png", "image/jpeg", "image/webp", "image/gif") and isinstance(data, str) and len(data) <= 12_000_000:
+            out.append({"mimeType": mime, "data": data})
     return out
 
 
@@ -745,7 +753,7 @@ def parse_codex_messages(path):
 def find_codex_file(session_id):
     if not session_id or "/" in session_id or ".." in session_id:
         return None
-    hits = glob.glob(os.path.join(CODEX, "sessions", "**", f"*{session_id}.jsonl"),
+    hits = glob.glob(os.path.join(CODEX, "sessions", "**", f"*{glob.escape(session_id)}.jsonl"),
                      recursive=True)
     return hits[0] if hits else None
 
@@ -754,7 +762,7 @@ def find_session_file(session_id):
     """按 sessionId 找到对应 JSONL"""
     if not session_id or "/" in session_id or ".." in session_id:
         return None
-    pat = os.path.join(WORKBUDDY, "projects", "**", session_id + ".jsonl")
+    pat = os.path.join(WORKBUDDY, "projects", "**", glob.escape(session_id) + ".jsonl")
     hits = glob.glob(pat, recursive=True)
     return hits[0] if hits else None
 
@@ -1093,12 +1101,12 @@ def get_sessions():
             _cache2["data"] = s
             _cache["at"] = now
             _cache2["at"] = now
-        desktop = desktop_call()
-        native = bool(desktop.get('ready') and not desktop.get('error'))
-        archived = set(desktop.get('archived', [])) if native else set(PhoneArchive().ids())
-        return [dict(s, archived=s.get("source") == "dsh" and s.get("id") in archived,
-                     archiveScope='desktop' if native else 'phone')
-                for s in _cache2["data"]]
+        sessions = _cache2["data"]
+    desktop = desktop_call()
+    native = bool(desktop.get("ready") and not desktop.get("error"))
+    archived = set(desktop.get("archived", [])) if native else set(PhoneArchive().ids())
+    return [dict(s, archived=s.get("source") == "dsh" and s.get("id") in archived,
+                 archiveScope="desktop" if native else "phone") for s in sessions]
 
 
 def find_control_session(sid, source):

@@ -19,9 +19,11 @@ class AcpClient(AppServerClient):
 
     def initialize(self):
         result = self.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
-        capabilities = result.get("agentCapabilities", {}).get("sessionCapabilities", {})
+        agent = result.get("agentCapabilities", {})
+        capabilities = agent.get("sessionCapabilities", {})
         if result.get("protocolVersion") != 1 or not {"resume", "close"} <= capabilities.keys():
             raise RpcError("DeepSeek ACP does not support resume and close")
+        self.image_input = agent.get("promptCapabilities", {}).get("image") is True
 
     def _server_request(self, message):
         if message["method"] == "session/request_permission":
@@ -113,7 +115,11 @@ class DeepSeekRuntime(RuntimeDaemon):
         )
 
     def status(self):
-        return {**super().status(), "imageInput": True}
+        with self.lock:
+            status = super().status()
+            client = self.client if status["appServerPid"] else None
+            # A cold start still needs to negotiate capabilities with ACP.
+            return {**status, "imageInput": client is None or client.image_input}
 
     def binary(self):
         return self.service.dsh
@@ -137,6 +143,9 @@ class DeepSeekRuntime(RuntimeDaemon):
         prompting = False
         turn = None
         try:
+            images = json.loads(row["images"])
+            if images and not client.image_input:
+                raise RpcError("inline image prompts were not advertised by this connection")
             params = {"cwd": row["cwd"], "mcpServers": []}
             with self.lock:
                 loaded = sid in self.loaded
@@ -166,7 +175,7 @@ class DeepSeekRuntime(RuntimeDaemon):
             after_seq = max((event.get("seq", 0) for event in _dsh_events(sid)), default=0)
             prompting = True
             result = client.request("session/prompt", {
-                "sessionId": sid, "prompt": ([{"type": "text", "text": row["text"]}] if row["text"] else []) + json.loads(row["images"]),
+                "sessionId": sid, "prompt": ([{"type": "text", "text": row["text"]}] if row["text"] else []) + images,
             }, timeout=3600)
             reason = result.get("stopReason")
             turn = self.committed_turn(sid, after_seq) if reason == "end_turn" else None
@@ -208,7 +217,9 @@ class DeepSeekRuntime(RuntimeDaemon):
                 del self.active[sid]
         self.wake.set()
         if status == 'completed':
-            desktop_call('attach', sid)
+            attached = desktop_call('attach', sid)
+            if attached.get('ready') and attached.get('error'):
+                self.record('dsh_attach_failed', session=sid, error=attached['error'])
 
     def release(self, sid):
         with self.lock:

@@ -67,6 +67,13 @@ class DiscoveryTests(unittest.TestCase):
         cache.write_text('{broken')
         self.assertEqual(len(server.parse_dsh_sessions()), 1)
 
+    def test_session_lookup_requires_a_literal_directory_name(self):
+        self.session('main')
+        main = self.root / 'sessions' / 'project' / 'main'
+        self.assertEqual(server.dsh_session_dir('main'), str(main))
+        self.assertIsNone(server.dsh_session_dir(str(main)))
+        self.assertIsNone(server.dsh_session_dir('mai?'))
+
 
 if __name__ == '__main__':
     unittest.main()

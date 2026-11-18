@@ -1,0 +1,4 @@
+- insert:
+    - id: agent-phone-desktop-bridge
+      name: ./index.mjs
+      inject: [workspaceRegistry, sessionPersistence]

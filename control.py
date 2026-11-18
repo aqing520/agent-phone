@@ -286,6 +286,8 @@ class ControlService:
         if not capability or not capability["available"]:
             code = "runtime_unavailable" if self.enabled and {"codex": self.codex, "dsh": self.dsh}.get(source) else "unsupported_source"
             raise ControlError(code, (capability or {}).get("reason", "此客户端尚未接通发送。"), 503 if code == "runtime_unavailable" else 501)
+        if images and not capability.get("runtime", {}).get("imageInput"):
+            raise ControlError("image_unavailable", "当前 DeepSeek 控制器不支持图片输入，请检查 ACP 图片模型配置。", 409)
         if new_chat:
             if not resolve_workspace:
                 raise ControlError("invalid_project", "新建会话需要选择项目。")

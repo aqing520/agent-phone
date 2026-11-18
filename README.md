@@ -142,6 +142,7 @@ node --check app.js
 
 - 新建聊天和已有会话都能选模型。Codex 从 app-server 获取目录，DeepSeek 从 ACP 获取带提供商的模型目录。未指定时沿用客户端默认或会话已保存的模型。更换账号或配置后，可以在模型旁点「刷新」。
 - DeepSeek ACP 可加载 Mac 上的 `~/.config/agent-phone/control/dsh-provider.patch.yml`。如需复用桌面中转站，只在该文件加入对应提供商的插件配置，并沿用 Harness 凭据引用。配置文件留在本机，权限设为 600。
+- 已有 DeepSeek 会话支持发送图片。原生归档、恢复和工作区挂接需要桌面桥。图片模型和桌面桥的配置见 [DeepSeek 同步与图片部署](docs/DEEPSEEK-SYNC.md)。
 - 已有会话沿用原工作目录。其他进程持有会话时，手机会提示占用。发送完成后可点「释放会话」，让其他进程接手。
 - 手机端会取消 ACP 权限请求。连接中断或缺少轮次结束记录时，页面会显示「结果待确认」。
 - 安装脚本会查找 PATH 中的 `dsh` 或官方桌面包内的 CLI。已有私人网络部署可重新运行安装脚本加入 DeepSeek 服务。

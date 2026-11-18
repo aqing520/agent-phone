@@ -1,6 +1,5 @@
 """Bounded RPC to the bridge hosted by DeepSeek Desktop, never a second owner."""
 import json
-import os
 import socket
 from pathlib import Path
 

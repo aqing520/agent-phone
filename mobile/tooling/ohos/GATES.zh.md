@@ -39,7 +39,7 @@ CI现有 Python tooling 之后运行入口合同自测；runtime路径过滤含 
 | `prepared` | 用下列原准备器执行两锁全新npm-ci及显式OH目标补丁，含`dsh/process/prepared-inputs.json/target-report.json/patch-results.json`。 |
 | `android_pristine` | `runtime/locks/dsh-0.2.2-rc.1`完整未补丁npm-ci前缀，保留Linux optional loader与固定rg15；不能用OH omit-optional组成输入代替。 |
 | `android_baseline` | 本轮权威基底源码。实际Android补丁选择、完整安装树、真实版本配方和两ABI输入流均与其对照，不写死历史文件数或hash。 |
-| `pnpm_prefix` | 按 `runtime/build-runtime.sh` 的 PNPM_VERSION/PNPM_INTEGRITY，从对应 `runtime/locks/pnpm-<version>` 完整复制两锁到独立目录，执行 main CI 原 `npm ci --prefix <prefix> --ignore-scripts --no-audit --no-fund`。保留实际安装收据及 `node_modules/.package-lock.json`。门禁核原锁、安装版本/integrity、可执行 bin，并用无排除的文件/链接清单记录整个安装身份；不自行下载。两个完整 shared-suite 仅使用该输入的显式 PNPM_BIN，不继承父进程同名变量。 |
+| `pnpm_prefix` | 按 `runtime/build-runtime.sh` 的 PNPM_VERSION/PNPM_INTEGRITY，从对应 `runtime/locks/pnpm-<version>` 完整复制两锁到独立目录，在该目录执行与主 CI 一致的 `npm ci --ignore-scripts --no-audit --no-fund`。保留实际安装收据及 `node_modules/.package-lock.json`。门禁核原锁、安装版本/integrity、可执行 bin，并用无排除的文件/链接清单记录整个安装身份；不自行下载。两个完整 shared-suite 仅使用该输入的显式 PNPM_BIN，不继承父进程同名变量。 |
 | `typescript_prefix` | 安装可执行原ETS夹具的TypeScript；这只是Linux转译适配器，非严格ArkTS编译证明。 |
 | `esbuild_prefix` | `runtime/ohos/node/build-tools`既有锁的独立npm-ci安装，固定esbuild0.27.3。不修改node目录。 |
 | `native_library_dir` | 两个Linux夹具库`libdsh_flock.so` / `libdsh_require_builtin.so`。前者可从固定flock.c用本机编译器构建，后者可用固定Linux require-builtin addon；都不得进HAP。publication/opener/zlib夹具由入口本轮重新编译。 |

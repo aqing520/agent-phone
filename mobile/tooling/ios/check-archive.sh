@@ -111,7 +111,7 @@ done
 mkdir -p "$RUNNER_TEMP/ipa/Payload"
 cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
 (cd "$RUNNER_TEMP/ipa" && /usr/bin/ditto -c -k --keepParent Payload "$RUNNER_TEMP/DSH-Go-unsigned.ipa")
-note 'archive ipa' "$(du -h "$RUNNER_TEMP/DSH-Go-unsigned.ipa" | cut -f1), unsigned, in the ios-unsigned-ipa artifact"
+note 'archive ipa' "$(du -h "$RUNNER_TEMP/DSH-Go-unsigned.ipa" | cut -f1), unsigned, in the runner temporary directory"
 
 note 'archive' "$( [ "$failed" -eq 0 ] && echo 'looks whole' || echo 'see the errors')"
 exit "$failed"

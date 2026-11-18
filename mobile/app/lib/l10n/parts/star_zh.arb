@@ -1,0 +1,17 @@
+{
+  "starPromptTitle": "{hours, plural, =0{你已经用了 Agent Phone 半个小时啦⁠~} =1{你已经用了 Agent Phone 一个小时啦⁠~} other{你已经用了 Agent Phone {hours} 个小时啦⁠~}}",
+  "@starPromptTitle": {
+    "description": "The star prompt's first line. hours is the whole hours of use so far, rounded down; 0 is half an hour (the first ask comes after 30 minutes). The word joiner keeps the ~ on the line of the word before it.",
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
+  "starPromptBody": "这是一个免费开源的项目，如果它让你的移动端体验更好了一点，欢迎点个 Star 支持一下！",
+  "starPromptPlea": "拜托你啦~ 这真的很重要！！",
+  "starPromptStar": "去 GitHub 点 Star",
+  "starPromptDone": "已经点过啦",
+  "starPromptLater": "下次再说",
+  "starSettingsTitle": "给 Agent Phone 点个 star"
+}

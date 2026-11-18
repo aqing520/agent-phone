@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src https://api.github.com https://gist.githubusercontent.com; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<title>Agent Phone 分享</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="viewer.css">
+<style>
+  :root {
+    --bg: #eef0f5;
+    --card: #ffffff;
+    --ink: #161a22;
+    --ink-2: #4a5160;
+    --ink-3: #8a90a0;
+    --line: rgba(20, 24, 34, 0.08);
+    --primary: #4d6bfe;
+    --on-primary: #ffffff;
+    --tile: rgba(77, 107, 254, 0.12);
+    --ok: #2f7d4f;
+    --ok-bg: rgba(47, 125, 79, 0.12);
+    --danger: #c0392b;
+
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --card: #1d212b;
+      --ink: #eef0f5;
+      --ink-2: #b6bccb;
+      --ink-3: #7c8396;
+      --line: rgba(255, 255, 255, 0.08);
+      --primary: #8ea2ff;
+      --on-primary: #10131a;
+      --tile: rgba(142, 162, 255, 0.16);
+      --ok: #8fd3a8;
+      --ok-bg: rgba(143, 211, 168, 0.14);
+      --danger: #ff8a7a;
+
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: max(32px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom));
+  }
+  main { width: 100%; max-width: 440px; }
+  .brand { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 13px; margin: 0 4px 16px; }
+  .brand b { color: var(--ink); font-weight: 600; letter-spacing: 0.01em; }
+  /* Lockup (BrandLockup in the app): glyph 1.25× the word's size, 0.36× from it, its visual
+     centre on the word's x-height centre. */
+  .lockup { white-space: nowrap; }
+  .lockup .glyph { width: 1.25em; height: 1.25em; margin-right: 0.36em; vertical-align: -0.36em; color: var(--primary); }
+  .card { background: var(--card); border-radius: 28px; padding: 24px 20px 20px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06); border: 0.5px solid var(--line); }
+  .hero { display: flex; align-items: center; gap: 16px; }
+  .tile { flex: none; width: 56px; height: 56px; border-radius: 14px; background: var(--tile); color: var(--primary); display: grid; place-items: center; font-size: 24px; font-weight: 600; }
+  .tile svg { width: 26px; height: 26px; }
+  h1 { font-size: 21px; line-height: 1.3; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .sub { color: var(--ink-3); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+  .summary { color: var(--ink-2); margin: 16px 0 0; overflow-wrap: anywhere; }
+  .facts { margin: 16px 0 0; padding: 0; list-style: none; border-top: 0.5px solid var(--line); }
+  .facts li { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 0.5px solid var(--line); }
+  .facts li span:first-child { color: var(--ink-2); flex: none; }
+  .facts li span:last-child { text-align: right; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .group { margin-top: 18px; }
+  .group h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); margin: 0 0 6px; }
+  .group ul { margin: 0; padding: 0; list-style: none; }
+  .group li { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; }
+  .group li span:last-child { color: var(--ink-3); text-align: right; }
+  .mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: 13px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); font-size: 13px; font-weight: 600; }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .actions { display: grid; gap: 12px; margin-top: 24px; }
+  .btn { display: flex; align-items: center; justify-content: center; height: 48px; border-radius: 999px; font-size: 16px; font-weight: 600; text-decoration: none; }
+  .btn.primary { background: var(--primary); color: var(--on-primary); }
+  .btn.secondary { color: var(--ink); border: 1px solid var(--line); background: transparent; }
+  .note { color: var(--ink-3); font-size: 13px; text-align: center; margin: 14px 0 0; }
+  .error { color: var(--danger); }
+  [hidden] { display: none !important; }
+  /* A conversation (viewer.css) takes the whole page. */
+  body.dv-page { display: block; padding: 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="lockup"><svg class="glyph" viewBox="41.25 41.25 25.5 25.5" fill="currentColor" aria-hidden="true"><rect x="41.25" y="41.25" width="10.5" height="10.5" rx="3"/><rect x="56.25" y="41.25" width="10.5" height="10.5" rx="3"/><rect x="41.25" y="56.25" width="10.5" height="10.5" rx="3"/><rect x="56.25" y="56.25" width="10.5" height="10.5" rx="3"/></svg><b>Agent Phone</b></span><span data-i18n="share">分享</span></div>
+  <section class="card" id="card" aria-live="polite">
+    <div class="hero">
+      <div class="tile" id="tile" aria-hidden="true"></div>
+      <div>
+        <h1 id="title" data-i18n="reading">正在读取…</h1>
+        <div class="sub" id="sub"></div>
+      </div>
+    </div>
+    <p class="summary" id="summary" hidden></p>
+    <ul class="facts" id="facts" hidden></ul>
+    <div id="groups"></div>
+    <div class="actions">
+      <a class="btn primary" id="open" data-i18n="openApp" href="#" hidden>用 Agent Phone 打开</a>
+      <a class="btn secondary" id="download" data-i18n="download" href="https://github.com/aqing520/agent-phone/releases" rel="noopener">下载 Agent Phone</a>
+    </div>
+    <p class="note" id="note" hidden></p>
+  </section>
+</main>
+<div id="dv-root" hidden></div>
+<script src="viewer.js"></script>
+<script src="share.js"></script>
+</body>
+</html>

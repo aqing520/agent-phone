@@ -2,6 +2,16 @@
 
 面向手机的多智能体工作台，通过 Mac 本地网关读取 WorkBuddy、Codex 和 DeepSeek Harness 的用量与会话记录。
 
+## v2 手机端源码
+
+v2 的 Android 工程位于仓库根目录的 [`mobile/`](mobile/)。其中 [`app/`](mobile/app/) 是 Flutter 界面和 Android 宿主，[`packages/`](mobile/packages/) 是 DSH 客户端与远程连接层，[`runtime/`](mobile/runtime/) 是手机本机引擎的构建源码。Android 打包入口为 [`mobile/tooling/build-apk.sh`](mobile/tooling/build-apk.sh)。
+
+手机端是 [DSH Go](https://github.com/ccch1mneyyy/dsh-go)（作者 ccch1mneyyy）的非官方衍生版本，基于 `e326a171f46b`，按 [AGPL-3.0](mobile/LICENSE) 发布；第三方组件以[各自声明](mobile/THIRD_PARTY_NOTICES.md)为准。2026-11-18 的改动包括接入 Mac 工作台、更换品牌图形、移除上游受限素材与手机操控功能。测试截图基线仅供本地使用，不随源码提交。已定档的网页版可通过 `v1` 标签查看。
+
+Agent Phone 不预装上游鲸鱼。你可在手机「设置 → 宠物 → 导入」选择自己的主题 ZIP。单张原创透明 PNG 也可以按[最小宠物包示例](mobile/docs/pets/README.md#2-最小可用包可直接照抄)打成只含待机状态的包。
+
+安卓 App 左侧抽屉的「Mac 工作台」可通过已配对的 DSH Remote 主机读取看板。Mac 上启动本仓库网关和桌面桥插件，并在 `ds-harness-remote` 的 `loopback.ports` 中加入 `5174`。该端口仅监听 Mac 回环地址，提供用量汇总和 DSH 会话索引。已有的 WireGuard 看板地址也可继续使用。
+
 ## 使用方案
 
 ### 方案一 · 同一局域网直连

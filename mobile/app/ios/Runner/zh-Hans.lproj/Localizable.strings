@@ -1,0 +1,12 @@
+"Agent Phone is working" = "Agent Phone 正在运行";
+"This conversation is still going" = "这一轮对话还在继续";
+"Ask Agent Phone" = "问 Agent Phone";
+"Ask" = "提问";
+"Message" = "内容";
+"What would you like to ask?" = "想问什么？";
+"Ask Agent Phone ${text}" = "问 Agent Phone ${text}";
+"Opens a new conversation with this message in the composer." = "新建对话，把这段内容放进输入框。";
+"Voice Input" = "语音输入";
+"Opens a new conversation and starts dictating." = "新建对话并开始听写。";
+"New Conversation" = "新建对话";
+"Opens a new conversation." = "新建对话。";

@@ -11,6 +11,13 @@
 !.env.example
 *.pem
 *.key
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.p7b
+*.mobileprovision
+*.provisionprofile
 
 # Python and local runtime files
 __pycache__/

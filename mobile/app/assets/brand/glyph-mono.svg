@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="41.25 41.25 25.5 25.5">
+  <!-- Agent Phone four-square mark, in the 108-unit launcher grid. -->
+  <g fill="currentColor">
+    <rect x="41.25" y="41.25" width="10.5" height="10.5" rx="3"/>
+    <rect x="56.25" y="41.25" width="10.5" height="10.5" rx="3"/>
+    <rect x="41.25" y="56.25" width="10.5" height="10.5" rx="3"/>
+    <rect x="56.25" y="56.25" width="10.5" height="10.5" rx="3"/>
+  </g>
+</svg>

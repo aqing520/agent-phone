@@ -1,0 +1,56 @@
+# references cloned for study (not part of the project)
+.refs/
+# toolchain logs and screenshots
+tooling/*.log
+tooling/env.sh
+tooling/shots/
+# runtime build cache and outputs (large, reproducible via runtime/build-runtime.sh)
+runtime/.cache/
+runtime/out*/
+runtime/.work/
+runtime/.build-*.log
+# Dart / Flutter tool state and local dependencies
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/node_modules/
+app/build/
+# Gradle writes reports (problems-report.html) here even though Flutter moves the build dir
+app/android/build/
+# build outputs never belong in git
+*.apk
+*.aab
+*.ipa
+*.hap
+*.hsp
+# UI screenshot baselines and failure dumps are local-only.
+/app/test/**/goldens/
+**/test/**/failures/
+
+# Upstream artwork and locally supplied character packs are not redistributed.
+/app/assets/companion/*.zip
+/app/assets/pets/deepy-whale/
+/app/assets/pets/whale-girl/
+/app/assets/star/star_whale.webp
+/app/assets/whale/
+/app/tool/pet_src/deepy-whale/
+/app/tool/pet_src/whale-girl/
+/app/tool/whale_src/
+/docs/assets/
+/site/home/
+
+# local scratch (agent notes, review packets)
+.harness-tmp*/
+.claude/
+# Python bytecode from tooling/
+**/__pycache__/
+*.pyc
+app/test/promo_capture/
+site/build/
+
+# Release assets (tooling/release_assets.py)
+/dist/
+
+# Reproducible private OHOS rg regex build
+runtime/ohos/process/build/
+# NodeMobile, the runtime archive and addon sources: tooling/ios/prepare-engine.sh
+app/ios/Engine/

@@ -1,6 +1,6 @@
 # DeepSeek desktop bridge deployment
 
-Verified on November 18, 2026 with DeepSeek Harness 0.2.2-rc.3. An isolated desktop profile loaded the bridge in the bundled Electron Host. The phone gateway and native Host APIs both archived and restored the same session, and a phone-created session appeared in its existing workspace. A real model identified the color of a test PNG, and the phone history displayed the image saved by Harness. These checks used a temporary profile and a loopback gateway. Deployment to the everyday profile is still pending.
+Verified on November 18, 2026 with DeepSeek Harness 0.2.2-rc.3. An isolated desktop profile verified native archive, restore, and workspace attachment. A real model identified the color of a test PNG, and the phone history displayed the image saved by Harness. The user then confirmed image sending and desktop archive sync in the everyday profile from a physical phone.
 
 ## Install in the desktop profile
 
@@ -36,7 +36,7 @@ When the desktop bridge is connected the phone reads and modifies the native arc
 - The isolated desktop Host and the phone HTTP API reflected archive and restore in both directions. The native workspace stored the newly attached session and its archive state.
 - The official ACP process sent a synthetic PNG through an image-capable route. The model recognized its color, and the phone history returned the normalized attachment.
 - Mobile-sized Chromium selected two PNGs whose encoded payload exceeded localStorage capacity. After a simulated dropped connection and reload, it kept the same request ID and image payload, then cleared the local copy after acknowledgment.
-- Everyday profile setup, physical-phone testing, and live chat handoff in the desktop renderer remain pending.
+- Image submission also reached the gateway when IndexedDB stopped responding. After reloading the page, the browser retried a small image or accepted a reattached large image with the original request ID.
 
 ## Isolated checks
 

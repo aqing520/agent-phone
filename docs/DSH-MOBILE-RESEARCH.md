@@ -39,12 +39,12 @@
 
 代码证据：
 
-- [ACP 进程定义](../dsh_runtime.py#L16-L24)：`arguments = ("acp",)`。
-- [任务执行](../dsh_runtime.py#L135-L170)：创建/恢复会话，再调用 ACP `session/prompt`。
-- [会话占用提示](../dsh_runtime.py#L182-L195)：明确处理其他 DSH 进程仍持有会话的情况。
-- [权限请求](../dsh_runtime.py#L26-L30)：ACP `session/request_permission` 当前直接返回 cancelled，没有转成手机审批卡。
+- ACP 进程以 `dsh acp` 启动。[ACP 进程定义](../dsh_runtime.py#L16-L18)
+- 创建或恢复会话后，调用 ACP `session/prompt`。[任务执行](../dsh_runtime.py#L141-L179)
+- 其他 DSH 进程仍持有会话时，手机会提示先释放会话。[会话占用提示](../dsh_runtime.py#L195-L198)
+- ACP `session/request_permission` 当前返回 `cancelled`。[权限请求](../dsh_runtime.py#L28-L32)
 - [桌面桥](../tools/dsh-desktop-bridge/index.mjs)：提供 status、archive、restore、attach，聊天发送仍走 ACP。
-- [部署记录](DEEPSEEK-SYNC.md)：隔离桌面 Host 已验证挂接、归档和恢复。日常环境仍待部署。
+- 隔离桌面 Host 已验证挂接、归档和恢复。日常环境已通过手机图片发送和归档同步验收。[部署记录](DEEPSEEK-SYNC.md)
 
 因此，你指出的差异成立：当前主要是“手机驱动额外 ACP 执行端”，不是完整的“桌面 DSH 遥控器”。现有桌面插件只是辅助桥，不是聊天控制后端。
 
@@ -59,13 +59,13 @@
 
 关键源码证据：
 
-- [Host 服务注入与上游认证](../reference/dsh-mobile-research/dsh-mobile/src/plugin.ts#L129-L192)：使用 webServer / connection 等 Host 服务，取得上游认证信息；不是启动另一个 ACP 执行端。
-- [回环上游限制](../reference/dsh-mobile-research/dsh-mobile/src/config.ts#L301-L314)：上游限制为带显式端口的 HTTP 回环 Origin。
-- [HTTP 代理](../reference/dsh-mobile-research/dsh-mobile/src/gateway.ts#L4035-L4073) 与 [WS 代理](../reference/dsh-mobile-research/dsh-mobile/src/gateway.ts#L4545-L4568)：请求进入原 DSH，上游认证 Cookie 留在服务端，不交给手机。
-- [前端启动图改写](../reference/dsh-mobile-research/dsh-mobile/src/gateway.ts#L662-L732)：解析 `__DSH_BOOT__` 并替换布局模块；不是简单 iframe，也不是独立实现全部聊天协议。
-- [移动布局公共 slots](../reference/dsh-mobile-research/dsh-mobile/src/mobile-layout.ts#L1234-L1275)：复用 sidebar / main / conversation / details 等原有能力。
-- [配对与撤销](../reference/dsh-mobile-research/dsh-mobile/src/access.ts#L298-L364)：持久设备凭据和短访问 Session 分层；撤销不仅删除手机本地记录。
-- [Host 任务事件](../reference/dsh-mobile-research/dsh-mobile/src/task-events.ts#L1-L13)：任务结束以 Host 为权威，不以手机是否仍收到文字推断。
+- [Host 服务注入与上游认证](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/plugin.ts#L129-L192)：使用 webServer / connection 等 Host 服务，取得上游认证信息；不是启动另一个 ACP 执行端。
+- [回环上游限制](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/config.ts#L301-L314)：上游限制为带显式端口的 HTTP 回环 Origin。
+- [HTTP 代理](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/gateway.ts#L4035-L4073) 与 [WS 代理](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/gateway.ts#L4545-L4568)：请求进入原 DSH，上游认证 Cookie 留在服务端，不交给手机。
+- [前端启动图改写](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/gateway.ts#L662-L732)：解析 `__DSH_BOOT__` 并替换布局模块；不是简单 iframe，也不是独立实现全部聊天协议。
+- [移动布局公共 slots](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/mobile-layout.ts#L1234-L1275)：复用 sidebar / main / conversation / details 等原有能力。
+- [配对与撤销](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/access.ts#L298-L364)：持久设备凭据和短访问 Session 分层；撤销不仅删除手机本地记录。
+- [Host 任务事件](https://github.com/saya-ch/dsh-mobile/blob/5c6c0f8978b6b4ebf64889d4124be57751182c13/src/task-events.ts#L1-L13)：任务结束以 Host 为权威，不以手机是否仍收到文字推断。
 
 所以它确实最贴近“遥控桌面同一 DSH”的目标。它仍有自己的网关和额外监听端口，区别是网关不接管会话执行。
 
@@ -77,21 +77,21 @@
 
 ### SSH 路径
 
-[remote_bootstrap.dart](../reference/dsh-mobile-research/dsh-Go/app/lib/remote/ssh/remote_bootstrap.dart#L65-L77) 显示，它通过 SSH 查找/启动自己管理的 `dsh web`，使用 `nohup`、回环地址和随机端口，保存 PID/日志供下次复用。
+[remote_bootstrap.dart](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/app/lib/remote/ssh/remote_bootstrap.dart#L65-L77) 显示，它通过 SSH 查找/启动自己管理的 `dsh web`，使用 `nohup`、回环地址和随机端口，保存 PID/日志供下次复用。
 
 **这条路径也可能是另起 DSH Web 实例，而非直接接管 macOS Desktop。** 因而不能把 DSH Go 所有远程模式当作“桌面同一 Host”范例。
 
 ### DSHarness Remote 路径
 
-- [远程后端](../reference/dsh-mobile-research/dsh-Go/app/lib/remote/relay/dsh_remote_backend.dart#L15-L24)：账号/主机目录、指纹固定、加密连接，尝试 LAN/P2P/TURN 后回退中继。
-- [隧道载体](../reference/dsh-mobile-research/dsh-Go/packages/dsh_remote/lib/src/carrier/tunnel_carrier.dart#L1-L24)：把 DshRpc / DshMux 映射到 `harness.remote.call`、stream 等远程协议，受 Host 插件端点白名单限制。
+- [远程后端](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/app/lib/remote/relay/dsh_remote_backend.dart#L15-L24)：账号/主机目录、指纹固定、加密连接，尝试 LAN/P2P/TURN 后回退中继。
+- [隧道载体](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/packages/dsh_remote/lib/src/carrier/tunnel_carrier.dart#L1-L24)：把 DshRpc / DshMux 映射到 `harness.remote.call`、stream 等远程协议，受 Host 插件端点白名单限制。
 - 远程 Host 插件本体属于另一个项目；本次只下载用户指定的两个仓库，没有审查第三方远程插件本体。
 
 ### 交互协议最值得参考
 
-- [发送和停止](../reference/dsh-mobile-research/dsh-Go/packages/dsh_client/lib/src/session_api.dart#L432-L473)：`session/prompt` 支持 requestId、queue / steer；停止走 `session/cancel`。
-- [订阅选项](../reference/dsh-mobile-research/dsh-Go/packages/dsh_client/lib/src/session_api.dart#L62-L113)：不仅订阅文字，还包括审批、问题、状态，以及断线后的完整基线同步。
-- [会话状态投影](../reference/dsh-mobile-research/dsh-Go/packages/dsh_client/lib/src/session_api.dart#L137-L155)：区分每一代连接的完整 baseline 与后续增量。
+- [发送和停止](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/packages/dsh_client/lib/src/session_api.dart#L432-L473)：`session/prompt` 支持 requestId、queue / steer；停止走 `session/cancel`。
+- [订阅选项](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/packages/dsh_client/lib/src/session_api.dart#L62-L113)：不仅订阅文字，还包括审批、问题、状态，以及断线后的完整基线同步。
+- [会话状态投影](https://github.com/ccch1mneyyy/dsh-Go/blob/246f503a1f51720091cbef173150fdf3939a23d4/packages/dsh_client/lib/src/session_api.dart#L137-L155)：区分每一代连接的完整 baseline 与后续增量。
 
 这里的 Web API `session/prompt` 与我们的 ACP 同名方法**不是同一契约**，不能直接复制参数。前者是 Host inbox 接收请求，后者现有实现等待整轮结束。
 

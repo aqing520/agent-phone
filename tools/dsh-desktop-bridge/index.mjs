@@ -3,8 +3,52 @@ import net from 'node:net';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { createServer } from 'node:http';
 export const name = 'agent-phone-desktop-bridge';
 export const inject = ['workspaceRegistry', 'sessionPersistence'];
+
+async function readDashboard(path) {
+  const port = Number(process.env.AGENT_PHONE_PORT || 5173);
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    redirect: 'error', signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`Dashboard gateway returned HTTP ${response.status}`);
+  return response.json();
+}
+
+export function createDashboardServer(read = readDashboard) {
+  const dashboard = createServer(async (request, response) => {
+    const port = request.socket.localPort;
+    if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(request.headers.host)) {
+      response.writeHead(403).end();
+      return;
+    }
+    if (request.method !== 'GET' || request.url !== '/api/dashboard') {
+      response.writeHead(404).end();
+      return;
+    }
+    try {
+      const [usage, history] = await Promise.all([read('/api/usage'), read('/api/sessions')]);
+      const { today, all } = usage.totals;
+      const sessions = history.sessions.filter(row => row.source === 'dsh' && row.archived !== true)
+        .map(({ id, source, title, project, projectKey, cwd, startedAt, endedAt }) =>
+          ({ id, source, title, project, projectKey, cwd, startedAt, endedAt }));
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ usage: { daily: usage.daily, totals: { today, all } }, sessions }));
+    } catch {
+      response.writeHead(503, { 'Cache-Control': 'no-store' }).end();
+    }
+  });
+  return dashboard;
+}
+
+function serveDashboard(ctx, port) {
+  const dashboard = createDashboardServer();
+  dashboard.on('error', error => ctx.logger(name).warn('Dashboard listener: %s', error.message));
+  dashboard.listen(port, '127.0.0.1');
+  ctx.effect(() => () => new Promise(resolve => dashboard.close(resolve)), 'agent-phone read-only dashboard');
+}
+
 export async function apply(ctx, config = {}) {
   const root = config.directory || path.join(os.homedir(), '.config/agent-phone/control');
   const socket = path.join(root, 'dsh-desktop.sock');
@@ -57,4 +101,5 @@ export async function apply(ctx, config = {}) {
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(socket,resolve);});
   await fs.chmod(socket,0o600);
   ctx.effect(() => () => new Promise(resolve => server.close(resolve)), 'agent-phone desktop bridge');
+  serveDashboard(ctx, config.dashboardPort ?? 5174);
 }
